@@ -1,0 +1,58 @@
+---
+title: "Lecture 1"
+format: html
+---
+Read the daily average maximum temperature in Detroit, MI for the years 1874 to 2021. These data were compiled by Dr. Yuchuan Lai, currently at the University of Wisconsin, Madison, when he was a doctoral student at Carnegie Mellon University. These data are available at: https://kilthub.cmu.edu/articles/dataset/Compiled_daily_temperature_and_precipitation_data_for_the_U_S_cities/7890488
+
+The methods by which these data were gathered are described in a journal article:
+Lai, Yuchuan, and David A. Dzombak. “Use of Historical Data to Assess Regional Climate Change.” Journal of Climate 32, no. 14 (July 15, 2019): 4299–4320. https://doi.org/10.1175/JCLI-D-18-0630.1.
+ 
+```{r}
+library(readxl)
+
+url <- "https://raw.githubusercontent.com/parthtv/Lecture-code/b2edb7592ce722783364263c135251c392f5eeb4/Lecture%201/detroit%20daily%20average%20maximum%20temperature.xlsx"
+
+tmp_file <- tempfile(fileext = ".xlsx")
+download.file(url, tmp_file, mode = "wb")
+
+detroit_temp <- read_excel(tmp_file)
+head(detroit_temp)
+```
+
+Plot the daily average maximum temperature
+```{r}
+library(tidyverse)
+
+detroit_temp %>%
+  ggplot(aes(x = year, y = tmax)) +
+  geom_line() +
+  labs(
+    title = "Detroit Daily Average Maximum Temperature",
+    x = "Year",
+    y = "Max Temperature (°F)"
+  )
+```
+Calculate the daily average maximum temperature from 1874 to 1883
+```{r}
+avg_tmax_1874_1883 <- detroit_temp %>%
+  filter(year >= 1874, year <= 1883) %>%
+  summarise(avg_tmax = mean(tmax, na.rm = TRUE)) %>%
+  pull(avg_tmax)
+
+avg_tmax_1874_1883
+```
+
+For each year, calculate the difference between avg_tmax_1874_1883 and the tmax, and plot this difference for each year
+```{r}
+detroit_temp <- detroit_temp %>%
+  mutate(tmax_diff = tmax - avg_tmax_1874_1883)
+
+detroit_temp %>%
+  ggplot(aes(x = year, y = tmax_diff)) +
+  geom_col() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(
+    title = "Detroit Tmax Difference from 1874–1883 Average",
+    x = "Year",
+    y = "Difference from 1874–1883 Average (°F)"
+  )
