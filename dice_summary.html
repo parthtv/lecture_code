@@ -1,0 +1,1558 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Summary of the DICE-2023 Core Model (DICEModel.jl)</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="dice_summary_files/libs/clipboard/clipboard.min.js"></script>
+<script src="dice_summary_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="dice_summary_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="dice_summary_files/libs/quarto-html/popper.min.js"></script>
+<script src="dice_summary_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="dice_summary_files/libs/quarto-html/anchor.min.js"></script>
+<link href="dice_summary_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="dice_summary_files/libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="dice_summary_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="dice_summary_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="dice_summary_files/libs/bootstrap/bootstrap-917079515d91bccb85b543faf8aa8bb6.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<style>
+  .dsym-hover { background: rgba(255, 200, 0, 0.35); border-radius: 3px; cursor: help; }
+  #dice-tip {
+    position: absolute; z-index: 10000; max-width: 20rem; padding: 0.45rem 0.65rem;
+    background: #1b1f24; color: #fff; border-radius: 6px; font-size: 0.85rem;
+    line-height: 1.35; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); pointer-events: none;
+  }
+  #dice-tip[hidden] { display: none; }
+  #dice-tip .dice-tip-type { display: block; margin-top: 0.2rem; font-size: 0.75rem; color: #ffd33d; }
+  #dice-tip .dice-tip-more { display: block; margin-top: 0.3rem; font-size: 0.75rem; font-style: italic; color: #d0d7de; }
+  #dice-tip .dice-tip-unit { display: block; margin-top: 0.1rem; font-size: 0.75rem; color: #9ecbff; }
+</style>
+<script>
+/* Hover glossary for the DICE summary.
+   1. transform() runs on every TeX string before MathJax parses it and wraps each
+      recognised symbol in \class{dsym-N}{...}, where N indexes GLOSSARY below.
+   2. A delegated mouseover/click handler shows the entry for the innermost symbol.
+   The .qmd equations stay plain LaTeX; keep GLOSSARY in step with the Notation tables. */
+(function (root) {
+  var T = {
+    param: 'Parameter (exogenous input)',
+    vari: 'Variable (solved by the model)',
+    dec: 'Decision variable (chosen by the planner)',
+    out: 'Derived output (computed after solving)',
+    idx: 'Index',
+    cst: 'Constant'
+  };
+
+  /* [regex on canonical name, meaning, type, unit (optional)]. First match wins, so put specific entries first.
+     Canonical name = base + "^label" + "_subscript", braces and spaces removed, e.g. "Y^gross_t,r". */
+  var GLOSSARY = [
+    // indices and time
+    [/^t$/, 'Time period', 'idx'],
+    [/^r$/, 'Region', 'idx'],
+    [/^j$/, 'Carbon-cycle reservoir (0 to 3)', 'idx'],
+    [/^k$/, 'Temperature box (1 = fast, 2 = slow)', 'idx'],
+    [/^T$/, 'Number of time periods', 'idx'],
+    [/^\\Delta$/, 'Length of a time step (tstep)', 'param', 'years'],
+    [/^e$/, 'Euler’s number, the base of the natural logarithm', 'cst'],
+    // economy
+    [/^\\bar\\mu/, 'Upper bound on the emission control rate', 'param', 'fraction'],
+    [/^\\mu_t$/, 'Global emission control rate', 'out', 'fraction'],
+    [/^\\mu/, 'Emission control rate: fraction of baseline emissions abated', 'dec', 'fraction (0 to 1)'],
+    [/^s(_|$)/, 'Savings rate: fraction of output invested', 'dec', 'fraction (0 to 1)'],
+    [/^A(_|$)/, 'Total factor productivity', 'param', 'not stated'],
+    [/^L(_|$)/, 'Population (labor)', 'param', 'millions'],
+    [/^k_0/, 'Initial capital stock', 'param', 'trillion 2019 USD (implied)'],
+    [/^K(_|$)/, 'Capital stock', 'vari', 'trillion 2019 USD'],
+    [/^\\gamma/, 'Capital share of output', 'param', 'fraction'],
+    [/^\\delta/, 'Annual capital depreciation rate', 'param', 'per year'],
+    [/^Y\^gross/, 'Gross output, before damages and abatement cost', 'vari', 'trillion 2019 USD per year'],
+    [/^Y\^net/, 'Output net of damages', 'vari', 'trillion 2019 USD per year'],
+    [/^Y(_|$)/, 'Output net of damages and abatement cost', 'vari', 'trillion 2019 USD per year'],
+    [/^a_1/, 'Damage function coefficient (linear term)', 'param', 'per °C (implied)'],
+    [/^a_2/, 'Damage function coefficient (scale of the power term)', 'param', 'per (°C)^a₃ (implied)'],
+    [/^a_3/, 'Damage function exponent on temperature', 'param', 'dimensionless (implied)'],
+    [/^text:Damages/, 'Climate damages', 'vari', 'trillion 2019 USD per year'],
+    [/^D(_|$)/, 'Damage fraction of gross output', 'vari', 'fraction'],
+    [/^\\kappa/, 'Abatement cost coefficient: cost of full abatement as a fraction of gross output', 'param', 'fraction of gross output'],
+    [/^\\theta/, 'Exponent of the abatement cost curve', 'param', 'dimensionless'],
+    [/^\\Lambda/, 'Abatement cost', 'vari', 'trillion 2019 USD per year'],
+    [/^I(_|$)/, 'Investment', 'vari', 'trillion 2019 USD per year'],
+    [/^C(_|$)/, 'Total consumption', 'vari', 'trillion 2019 USD per year'],
+    [/^c(_|$)/, 'Per capita consumption', 'vari', 'thousand 2019 USD per year'],
+    [/^p\^back/, 'Backstop price: cost of fully abating emissions', 'param', '2019 USD per tCO₂ (inferred from the carbon price equation)'],
+    [/^P\^C/, 'Implied carbon price (marginal abatement cost)', 'vari', '2019 USD per tCO₂'],
+    [/^S(_|$)/, 'Global savings rate, I / Y', 'vari', 'fraction'],
+    // emissions
+    [/^\\sigma/, 'Emissions intensity: emissions per unit of gross output with no abatement', 'param', 'GtCO₂ per trillion 2019 USD (implied)'],
+    [/^E\^land/, 'Land-use CO₂ emissions', 'param', 'GtCO₂ per year (implied)'],
+    [/^E\^nonCO_2/, 'Baseline abatable non-CO₂ greenhouse gas emissions (CO₂-equivalent)', 'param', 'GtCO₂ per year (implied)'],
+    [/^E\^ind/, 'Industrial CO₂ emissions after abatement', 'vari', 'GtCO₂ per year'],
+    [/^E\^CO_2e/, 'Total greenhouse gas emissions (CO₂-equivalent) after abatement', 'vari', 'GtCO₂ per year'],
+    [/^E\^CO_2/, 'Total CO₂ emissions after abatement', 'vari', 'GtCO₂ per year'],
+    [/^text:CCATOT/, 'Cumulative CO₂ emissions', 'vari', 'GtC'],
+    // carbon cycle
+    [/^R_/, 'Excess atmospheric carbon held in reservoir j', 'vari', 'GtC'],
+    [/^\\phi/, 'Fraction of each emission that enters reservoir j', 'param', 'fraction'],
+    [/^\\tau/, 'Base decay timescale of reservoir j', 'param', 'years'],
+    [/^\\alpha/, 'Scaling factor applied to all reservoir timescales (slower uptake as sinks fill and the planet warms)', 'vari', 'dimensionless'],
+    [/^M\^AT/, 'Atmospheric carbon stock', 'vari', 'GtC'],
+    [/^M\^eq/, 'Preindustrial equilibrium atmospheric carbon', 'param', 'GtC (implied)'],
+    [/^M_0/, 'Atmospheric carbon in the initial year', 'param', 'GtC (implied)'],
+    [/^text:cum/, 'Cumulative emissions in the initial year', 'param', 'GtC (implied)'],
+    [/^text:CACC/, 'Carbon accumulated in sinks (ocean and land)', 'vari', 'GtC'],
+    [/^text:IRF100/, '100-year integrated impulse response: time-integrated airborne fraction of a carbon pulse', 'vari', 'years (implied)'],
+    [/^text:irf/, 'Intercept of the linear IRF100 relationship', 'param', 'years (implied)'],
+    [/^text:irc/, 'Sink-saturation slope of the IRF100 relationship', 'param', 'years per GtC (implied)'],
+    [/^text:irt/, 'Temperature slope of the IRF100 relationship', 'param', 'years per °C (implied)'],
+    // climate
+    [/^F_2\\times/, 'Forcing from a doubling of atmospheric CO₂', 'param', 'W/m² (implied)'],
+    [/^F\^misc/, 'Exogenous forcing from other sources (aerosols, other gases)', 'param', 'W/m² (implied)'],
+    [/^F\^GHG/, 'Forcing from abatable non-CO₂ gases', 'vari', 'W/m² (implied)'],
+    [/^F(_|$)/, 'Total radiative forcing', 'vari', 'W/m²'],
+    [/^f_1/, 'Forcing added per unit of non-CO₂ emissions', 'param', 'W/m² per (GtCO₂ per year) (implied)'],
+    [/^f_2/, 'Fraction of last period’s non-CO₂ forcing that persists', 'param', 'fraction'],
+    [/^T\^box/, 'Temperature anomaly of box k', 'vari', '°C'],
+    [/^T\^AT/, 'Atmospheric temperature change above preindustrial', 'vari', '°C above the 1765 level'],
+    [/^d_/, 'Response time of temperature box k', 'param', 'years'],
+    [/^\\lambda/, 'Equilibrium temperature response of box k per unit forcing', 'param', '°C per W/m² (implied)'],
+    // welfare
+    [/^\\eta/, 'Elasticity of marginal utility of consumption (elasmu)', 'param', 'dimensionless'],
+    [/^u(_|$)/, 'Per capita utility', 'vari', 'not stated'],
+    [/^\\rho/, 'Social discount factor (rr)', 'param', 'dimensionless'],
+    [/^w(_|$)/, 'Regional welfare weight: how much the planner values region r\u2019s welfare (set by the user, not solved for)', 'param', 'dimensionless'],
+    [/^U(_|$)/, 'Period welfare, summed over regions', 'vari', 'not stated'],
+    [/^text:scale_1/, 'Scale constant for the objective', 'param', 'not stated'],
+    [/^text:scale_2/, 'Offset constant for the objective', 'param', 'not stated'],
+    [/^W$/, 'Total welfare (the objective)', 'vari', 'not stated'],
+    // post-processing
+    [/^text:SCC/, 'Social cost of carbon', 'out', 'dollars per tCO₂ (implied by the formula)', 'scc-explainer'],
+    [/^\\nu\^E/, 'Shadow price (Lagrange multiplier) on the emissions constraint: welfare change per extra GtCO\u2082', 'out', null, 'scc-explainer'],
+    [/^\\nu\^C/, 'Shadow price (Lagrange multiplier) on the consumption constraint: welfare change per extra unit of consumption', 'out', null, 'scc-explainer']
+  ];
+
+  var LABEL = /^[A-Za-z]+(_\{?[A-Za-z0-9]+\}?)?$/;
+  var TEXTCMDS = { text: 1, mathit: 1, mathrm: 1, operatorname: 1 };
+
+  function lookup(canon) {
+    for (var i = 0; i < GLOSSARY.length; i++) if (GLOSSARY[i][0].test(canon)) return i;
+    return -1;
+  }
+  function clean(x) { return x.replace(/\\,|[{}\s]/g, ''); }
+  function unbrace(x) { return x.charAt(0) === '{' ? x.slice(1, -1) : x; }
+  function skipGroup(s, i) {
+    for (var d = 0, j = i; j < s.length; j++) {
+      var c = s.charAt(j);
+      if (c === '\\') { j++; continue; }
+      if (c === '{') d++;
+      else if (c === '}' && --d === 0) return j + 1;
+    }
+    return s.length;
+  }
+  function readToken(s, i) {
+    var c = s.charAt(i);
+    if (c === '{') return skipGroup(s, i);
+    if (c === '\\') return i + /^\\([A-Za-z]+|[^A-Za-z])/.exec(s.slice(i))[0].length;
+    return i + 1;
+  }
+  // operand of ^ or _, always returned braced so the result is valid wherever it lands
+  function script(kind, inner, raw) { return kind + '{' + (raw ? inner : tx(inner)) + '}'; }
+
+  function tx(s) {
+    var out = '', i = 0, n = s.length;
+    while (i < n) {
+      var c = s.charAt(i), j, base, canonBase;
+      if (c === '{') { j = skipGroup(s, i); out += '{' + tx(s.slice(i + 1, j - 1)) + '}'; i = j; continue; }
+      if (c === '^' || c === '_') {
+        out += c; i++;
+        if (i < n) { j = readToken(s, i); out += '{' + tx(s.slice(i, j)) + '}'; i = j; }
+        continue;
+      }
+      if (c === '\\') {
+        var m = /^\\([A-Za-z]+|[^A-Za-z])/.exec(s.slice(i)), name = m[1];
+        j = i + m[0].length;
+        if (!/^[A-Za-z]/.test(name)) { out += m[0]; i = j; continue; }      // \, \; \{ ...
+        if (TEXTCMDS[name] && s.charAt(j) === '{') {
+          var e = skipGroup(s, j);
+          canonBase = 'text:' + s.slice(j + 1, e - 1); j = e;
+        } else if (name === 'bar') {
+          var e2 = readToken(s, j); canonBase = '\\bar' + s.slice(j, e2); j = e2;
+        } else canonBase = '\\' + name;
+      } else if (/[A-Za-z]/.test(c)) { j = i + 1; canonBase = c; }
+      else { out += c; i++; continue; }
+      base = s.slice(i, j);
+
+      var scripts = [];
+      while (j < n && (s.charAt(j) === '^' || s.charAt(j) === '_')) {
+        var kind = s.charAt(j), k = readToken(s, j + 1);
+        if (scripts.some(function (x) { return x.kind === kind; })) break;
+        scripts.push({ kind: kind, inner: unbrace(s.slice(j + 1, k)) });
+        j = k;
+      }
+      var sup = scripts.filter(function (x) { return x.kind === '^'; })[0];
+      var sub = scripts.filter(function (x) { return x.kind === '_'; })[0];
+      var subPart = sub ? '_' + clean(sub.inner) : '';
+      var idx = -1, labelled = false;
+      if (sup && LABEL.test(sup.inner)) {
+        idx = lookup(canonBase + '^' + clean(sup.inner) + subPart);
+        labelled = idx >= 0;
+      }
+      if (idx < 0) idx = lookup(canonBase + subPart);
+
+      var body = base + scripts.map(function (x) {
+        return script(x.kind, x.inner, labelled && x === sup);
+      }).join('');
+      out += idx >= 0 ? '\\class{dsym-' + idx + '}{' + body + '}' : body;
+      i = j;
+    }
+    return out;
+  }
+
+  root.DiceTips = { transform: tx, glossary: GLOSSARY, types: T };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+window.MathJax = {
+  loader: { load: ['[tex]/html'] },
+  tex: { packages: { '[+]': ['html'] } },
+  startup: {
+    ready: function () {
+      MathJax.startup.defaultReady();
+      MathJax.startup.input[0].preFilters.add(function (o) {
+        o.math.math = window.DiceTips.transform(o.math.math);
+      });
+    }
+  }
+};
+
+document.addEventListener('DOMContentLoaded', function () {
+  var tip = document.createElement('div');
+  tip.id = 'dice-tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true;
+  document.body.appendChild(tip);
+  var current = null;
+
+  function symbolAt(node) {
+    for (; node && node.nodeType === 1; node = node.parentNode) {
+      var m = /(?:^|\s)dsym-(\d+)(?:\s|$)/.exec(node.getAttribute('class') || '');
+      if (m) return { el: node, entry: window.DiceTips.glossary[+m[1]] };
+    }
+    return null;
+  }
+  function hide() {
+    tip.hidden = true;
+    if (current) current.classList.remove('dsym-hover');
+    current = null;
+  }
+  function show(hit) {
+    if (current === hit.el) return;
+    hide();
+    current = hit.el; current.classList.add('dsym-hover');
+    tip.textContent = '';
+    tip.appendChild(document.createTextNode(hit.entry[1]));
+    var type = document.createElement('span');
+    type.className = 'dice-tip-type';
+    type.textContent = window.DiceTips.types[hit.entry[2]];
+    tip.appendChild(type);
+    if (hit.entry[4]) {
+      var more = document.createElement('span');
+      more.className = 'dice-tip-more';
+      more.textContent = 'Click for a fuller explanation';
+      tip.appendChild(more);
+    }
+    if (hit.entry[3]) {
+      var unit = document.createElement('span');
+      unit.className = 'dice-tip-unit';
+      unit.textContent = 'Unit: ' + hit.entry[3];
+      tip.appendChild(unit);
+    }
+    tip.hidden = false;
+    var r = hit.el.getBoundingClientRect();
+    var left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - tip.offsetWidth - 8);
+    tip.style.left = Math.max(window.scrollX + 8, left) + 'px';
+    tip.style.top = (r.bottom + window.scrollY + 6) + 'px';
+  }
+  document.addEventListener('mouseover', function (e) {
+    var hit = symbolAt(e.target);
+    if (hit) show(hit); else hide();
+  });
+  // Expand a collapsed Quarto callout and bring it into view.
+  function openCallout(id, smooth) {
+    var box = document.getElementById(id);
+    if (!box) return;
+    var header = box.querySelector('.callout-header');
+    if (header && header.getAttribute('aria-expanded') === 'false') header.click();
+    box.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+  }
+  function openFromHash() {
+    var id = decodeURIComponent(location.hash.slice(1));
+    if (id && document.querySelector('#' + id + '.callout')) openCallout(id, false);
+  }
+  window.addEventListener('hashchange', openFromHash);
+  openFromHash();
+
+  document.addEventListener('click', function (e) {   // touch devices have no hover
+    var hit = symbolAt(e.target), linked = null;
+    // a click anywhere on a linked symbol counts, including its subscripts and superscripts
+    for (var n = e.target; n && n.nodeType === 1 && !linked; n = n.parentNode) {
+      var h = symbolAt(n);
+      if (h && h.entry[4]) linked = h;
+      if (h) n = h.el;
+    }
+    if (linked) { hide(); openCallout(linked.entry[4], true); }
+    else if (hit) show(hit);
+    else hide();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
+});
+</script>
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script defer="" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-chtml.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+</head>
+
+<body class="quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+  <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview"><span class="header-section-number">1</span> Overview</a></li>
+  <li><a href="#sec-notation" id="toc-sec-notation" class="nav-link" data-scroll-target="#sec-notation"><span class="header-section-number">2</span> Notation</a></li>
+  <li><a href="#economy" id="toc-economy" class="nav-link" data-scroll-target="#economy"><span class="header-section-number">3</span> Economy</a></li>
+  <li><a href="#emissions" id="toc-emissions" class="nav-link" data-scroll-target="#emissions"><span class="header-section-number">4</span> Emissions</a></li>
+  <li><a href="#carbon-cycle-four-reservoir-impulse-response" id="toc-carbon-cycle-four-reservoir-impulse-response" class="nav-link" data-scroll-target="#carbon-cycle-four-reservoir-impulse-response"><span class="header-section-number">5</span> Carbon cycle (four-reservoir impulse response)</a></li>
+  <li><a href="#climate" id="toc-climate" class="nav-link" data-scroll-target="#climate"><span class="header-section-number">6</span> Climate</a></li>
+  <li><a href="#welfare-and-objective" id="toc-welfare-and-objective" class="nav-link" data-scroll-target="#welfare-and-objective"><span class="header-section-number">7</span> Welfare and objective</a></li>
+  <li><a href="#solution-and-post-processing" id="toc-solution-and-post-processing" class="nav-link" data-scroll-target="#solution-and-post-processing"><span class="header-section-number">8</span> Solution and post-processing</a></li>
+  <li><a href="#notes-on-the-implementation" id="toc-notes-on-the-implementation" class="nav-link" data-scroll-target="#notes-on-the-implementation"><span class="header-section-number">9</span> Notes on the implementation</a></li>
+  </ul>
+</nav>
+</div>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Summary of the DICE-2023 Core Model (DICEModel.jl)</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>Source: <code>src/CoreModel.jl</code> in <a href="https://github.com/sylvaticus/DICEModel.jl">DICEModel.jl</a> (MIT license). This is a regionalized implementation of DICE-2023 in Julia/JuMP, solved with Ipopt. Numeric parameter values live in the <code>DICEParameters</code> struct and are not reproduced here.</p>
+<p><em>Hover over (or tap) any symbol in an equation to see what it means and whether it is a variable or a parameter.</em></p>
+<section id="overview" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="overview"><span class="header-section-number">1</span> Overview</h2>
+<p>DICE is an optimal growth model coupled to a simple climate model. A social planner chooses, for each period <span class="math inline">\(t\)</span> and region <span class="math inline">\(r\)</span>:</p>
+<ul>
+<li>the <strong>emission control rate</strong> <span class="math inline">\(\mu_{t,r}\)</span> (<code>MIU_R</code>, bounded by <span class="math inline">\(0 \le \mu \le \bar\mu_{t,r}\)</span>),</li>
+<li>the <strong>savings rate</strong> <span class="math inline">\(s_{t,r}\)</span> (<code>S_R</code>, <span class="math inline">\(0 \le s \le 1\)</span>),</li>
+<li>the <strong>carbon-cycle decay scaling</strong> <span class="math inline">\(\alpha_t\)</span> (<code>ALPHA</code>, <span class="math inline">\(0.1 \le \alpha \le 100\)</span>), which is pinned down by an equation rather than being a true policy choice.</li>
+</ul>
+<p>The planner maximizes discounted, population-weighted welfare subject to the economy, emissions, carbon cycle, and temperature equations below. Time steps are of length <span class="math inline">\(\Delta\)</span> (<code>tstep</code>) years, indexed <span class="math inline">\(t = 1,\dots,T\)</span>; regions are indexed <span class="math inline">\(r\)</span>.</p>
+</section>
+<section id="sec-notation" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="sec-notation"><span class="header-section-number">2</span> Notation</h2>
+<p>All symbols are indexed by period <span class="math inline">\(t\)</span> and, where relevant, region <span class="math inline">\(r\)</span>. Unless noted, “parameter” means an exogenous input and “variable” means something the model solves for. Symbols are grouped by the section where they first appear. The Unit column gives units stated in the comments of the source code (<code>CoreModel.jl</code>). Units marked “implied” are not commented in the source but follow directly from the equations, and “not stated” means neither applies. Dollar amounts are in 2019 US dollars.</p>
+<p><strong>Indices and time</strong></p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Symbol</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(t\)</span>, <span class="math inline">\(T\)</span></td>
+<td>Time period and number of periods</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(r\)</span>, <span class="math inline">\(r'\)</span></td>
+<td>Region (and a dummy region used inside sums)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\Delta\)</span></td>
+<td>Length of a time step in years (<code>tstep</code>)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(j\)</span></td>
+<td>Carbon-cycle reservoir, <span class="math inline">\(j = 0,\dots,3\)</span></td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(k\)</span></td>
+<td>Temperature box, <span class="math inline">\(k = 1\)</span> (fast) or <span class="math inline">\(2\)</span> (slow)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Economy</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Symbol</th>
+<th>Meaning</th>
+<th>Type</th>
+<th>Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(\mu_{t,r}\)</span></td>
+<td>Emission control rate: fraction of baseline emissions abated</td>
+<td>variable (decision)</td>
+<td>fraction (0 to 1)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(s_{t,r}\)</span></td>
+<td>Savings rate: fraction of output invested</td>
+<td>variable (decision)</td>
+<td>fraction (0 to 1)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\bar\mu_{t,r}\)</span></td>
+<td>Upper bound on the emission control rate (time- and region-specific)</td>
+<td>parameter</td>
+<td>fraction</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(A_{t,r}\)</span></td>
+<td>Total factor productivity</td>
+<td>parameter</td>
+<td>not stated</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(L_{t,r}\)</span></td>
+<td>Population (labor)</td>
+<td>parameter</td>
+<td>millions</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(K_{t,r}\)</span></td>
+<td>Capital stock</td>
+<td>variable</td>
+<td>trillion 2019 USD</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(k_{0,r}\)</span></td>
+<td>Initial capital stock</td>
+<td>parameter</td>
+<td>trillion 2019 USD (implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\gamma_r\)</span></td>
+<td>Capital share of output</td>
+<td>parameter</td>
+<td>fraction</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\delta_r\)</span></td>
+<td>Annual capital depreciation rate</td>
+<td>parameter</td>
+<td>per year</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(Y^{gross}_{t,r}\)</span></td>
+<td>Output before damages and abatement costs</td>
+<td>variable</td>
+<td>trillion 2019 USD per year</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(a_{1,r}, a_{2,r}, a_{3,r}\)</span></td>
+<td>Damage function coefficients; <span class="math inline">\(a_3\)</span> is the exponent on temperature</td>
+<td>parameters</td>
+<td><span class="math inline">\(a_1\)</span>: per <span class="math inline">\(^\circ\)</span>C; <span class="math inline">\(a_2\)</span>: per <span class="math inline">\((^\circ\)</span>C<span class="math inline">\()^{a_3}\)</span>; <span class="math inline">\(a_3\)</span>: dimensionless (all implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(D_{t,r}\)</span></td>
+<td>Damage fraction of gross output</td>
+<td>variable</td>
+<td>fraction</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\text{Damages}_{t,r}\)</span></td>
+<td>Climate damages: gross output times the damage fraction</td>
+<td>variable</td>
+<td>trillion 2019 USD per year</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(Y^{net}_{t,r}\)</span></td>
+<td>Output after damages</td>
+<td>variable</td>
+<td>trillion 2019 USD per year</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\kappa_{t,r}\)</span></td>
+<td>Abatement cost coefficient (cost of full abatement as a fraction of gross output)</td>
+<td>parameter</td>
+<td>fraction of gross output</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\theta_{t,r}\)</span></td>
+<td>Exponent of the abatement cost curve</td>
+<td>parameter</td>
+<td>dimensionless</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\Lambda_{t,r}\)</span></td>
+<td>Abatement cost</td>
+<td>variable</td>
+<td>trillion 2019 USD per year</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(Y_{t,r}\)</span></td>
+<td>Output net of damages and abatement cost</td>
+<td>variable</td>
+<td>trillion 2019 USD per year</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(I_{t,r}\)</span></td>
+<td>Investment</td>
+<td>variable</td>
+<td>trillion 2019 USD per year</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(C_{t,r}\)</span></td>
+<td>Total consumption</td>
+<td>variable</td>
+<td>trillion 2019 USD per year</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(c_{t,r}\)</span></td>
+<td>Per capita consumption</td>
+<td>variable</td>
+<td>thousand 2019 USD per year</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(p^{back}_{t,r}\)</span></td>
+<td>Backstop price: cost of fully abating emissions</td>
+<td>parameter</td>
+<td>2019 USD per tCO<span class="math inline">\(_2\)</span> (inferred from the carbon price equation)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(P^{C}_{t,r}\)</span></td>
+<td>Implied carbon price</td>
+<td>variable</td>
+<td>2019 USD per tCO<span class="math inline">\(_2\)</span></td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(S_t\)</span></td>
+<td>Global savings rate, <span class="math inline">\(I_t/Y_t\)</span></td>
+<td>variable</td>
+<td>fraction</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Emissions</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Symbol</th>
+<th>Meaning</th>
+<th>Type</th>
+<th>Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(\sigma_{t,r}\)</span></td>
+<td>Emissions intensity: emissions per unit of gross output with no abatement</td>
+<td>parameter</td>
+<td>GtCO<span class="math inline">\(_2\)</span> per trillion 2019 USD (implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(E^{land}_{t,r}\)</span></td>
+<td>Land-use CO<span class="math inline">\(_2\)</span> emissions</td>
+<td>parameter</td>
+<td>GtCO<span class="math inline">\(_2\)</span> per year (implied)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(E^{nonCO_2}_{t,r}\)</span></td>
+<td>Baseline abatable non-CO<span class="math inline">\(_2\)</span> greenhouse gas emissions, in CO<span class="math inline">\(_2\)</span>-equivalent</td>
+<td>parameter</td>
+<td>GtCO<span class="math inline">\(_2\)</span> per year (implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(E^{ind}_{t,r}\)</span></td>
+<td>Industrial CO<span class="math inline">\(_2\)</span> emissions after abatement</td>
+<td>variable</td>
+<td>GtCO<span class="math inline">\(_2\)</span> per year</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(E^{CO_2}_{t,r}\)</span></td>
+<td>Total CO<span class="math inline">\(_2\)</span> emissions (industrial plus land use) after abatement</td>
+<td>variable</td>
+<td>GtCO<span class="math inline">\(_2\)</span> per year</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(E^{CO_2e}_{t,r}\)</span></td>
+<td>Total greenhouse gas emissions in CO<span class="math inline">\(_2\)</span>-equivalent after abatement</td>
+<td>variable</td>
+<td>GtCO<span class="math inline">\(_2\)</span> per year</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\text{CCATOT}_t\)</span></td>
+<td>Cumulative CO<span class="math inline">\(_2\)</span> emissions</td>
+<td>variable</td>
+<td>GtC</td>
+</tr>
+<tr class="even">
+<td>3.666, 3.667</td>
+<td>Conversion factors from GtCO<span class="math inline">\(_2\)</span> to GtC (molecular weight ratio 44/12)</td>
+<td>constants</td>
+<td>GtCO<span class="math inline">\(_2\)</span> per GtC</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Carbon cycle</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Symbol</th>
+<th>Meaning</th>
+<th>Type</th>
+<th>Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(R_{j,t}\)</span></td>
+<td>Atmospheric carbon held in reservoir <span class="math inline">\(j\)</span> above the preindustrial level</td>
+<td>variable</td>
+<td>GtC</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\phi_j\)</span></td>
+<td>Fraction of an emission pulse that goes to reservoir <span class="math inline">\(j\)</span> (the <span class="math inline">\(\phi_j\)</span> sum to 1)</td>
+<td>parameter</td>
+<td>fraction</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\tau_j\)</span></td>
+<td>Base decay timescale of reservoir <span class="math inline">\(j\)</span></td>
+<td>parameter</td>
+<td>years</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\alpha_t\)</span></td>
+<td>Scaling factor that lengthens or shortens all timescales as sinks saturate</td>
+<td>variable</td>
+<td>dimensionless</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(M^{AT}_t\)</span></td>
+<td>Atmospheric carbon stock</td>
+<td>variable</td>
+<td>GtC</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(M^{eq}\)</span></td>
+<td>Preindustrial equilibrium atmospheric carbon</td>
+<td>parameter</td>
+<td>GtC (implied)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(M_0\)</span></td>
+<td>Atmospheric carbon in the initial year (2020)</td>
+<td>parameter</td>
+<td>GtC (implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\text{cum}_0\)</span></td>
+<td>Cumulative emissions in the initial year</td>
+<td>parameter</td>
+<td>GtC (implied)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\text{CACC}_t\)</span></td>
+<td>Carbon accumulated in sinks (ocean and land)</td>
+<td>variable</td>
+<td>GtC</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\text{IRF100}_t\)</span></td>
+<td>100-year integrated impulse response: the time-integrated airborne fraction of a carbon pulse over 100 years</td>
+<td>variable</td>
+<td>years (implied)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\mathit{irf}_0, \mathit{irc}, \mathit{irt}\)</span></td>
+<td>Intercept, sink-saturation slope, and temperature slope of the linear IRF100 relationship</td>
+<td>parameters</td>
+<td>years; years per GtC; years per <span class="math inline">\(^\circ\)</span>C (all implied)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Climate</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Symbol</th>
+<th>Meaning</th>
+<th>Type</th>
+<th>Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(F_t\)</span></td>
+<td>Total radiative forcing</td>
+<td>variable</td>
+<td>W/m<span class="math inline">\(^2\)</span></td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(F_{2\times}\)</span></td>
+<td>Forcing from a doubling of atmospheric CO<span class="math inline">\(_2\)</span></td>
+<td>parameter</td>
+<td>W/m<span class="math inline">\(^2\)</span> (implied)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(F^{misc}_t\)</span></td>
+<td>Exogenous forcing from other sources (aerosols, other gases)</td>
+<td>parameter</td>
+<td>W/m<span class="math inline">\(^2\)</span> (implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(F^{GHG}_{t,r}\)</span></td>
+<td>Forcing from abatable non-CO<span class="math inline">\(_2\)</span> gases</td>
+<td>variable</td>
+<td>W/m<span class="math inline">\(^2\)</span> (implied)</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(f_1\)</span></td>
+<td>Forcing added per unit of non-CO<span class="math inline">\(_2\)</span> emissions</td>
+<td>parameter</td>
+<td>W/m<span class="math inline">\(^2\)</span> per (GtCO<span class="math inline">\(_2\)</span> per year) (implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(f_2\)</span></td>
+<td>Fraction of last period’s non-CO<span class="math inline">\(_2\)</span> forcing that persists</td>
+<td>parameter</td>
+<td>fraction</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(T^{box}_{k,t}\)</span></td>
+<td>Temperature anomaly of box <span class="math inline">\(k\)</span></td>
+<td>variable</td>
+<td><span class="math inline">\(^\circ\)</span>C</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(d_k\)</span></td>
+<td>Response time of box <span class="math inline">\(k\)</span></td>
+<td>parameter</td>
+<td>years</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\lambda_k\)</span></td>
+<td>Equilibrium temperature response of box <span class="math inline">\(k\)</span> per unit forcing</td>
+<td>parameter</td>
+<td><span class="math inline">\(^\circ\)</span>C per W/m<span class="math inline">\(^2\)</span> (implied)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(T^{AT}_t\)</span></td>
+<td>Atmospheric temperature change above preindustrial</td>
+<td>variable</td>
+<td><span class="math inline">\(^\circ\)</span>C above the 1765 level</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Welfare</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Symbol</th>
+<th>Meaning</th>
+<th>Type</th>
+<th>Unit</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(\eta_r\)</span></td>
+<td>Elasticity of marginal utility of consumption (<code>elasmu</code>); higher values mean more aversion to inequality across time and regions</td>
+<td>parameter</td>
+<td>dimensionless</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(u_{t,r}\)</span></td>
+<td>Per capita utility in a period</td>
+<td>variable</td>
+<td>not stated</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\rho_{t,r}\)</span></td>
+<td>Social discount factor applied to period <span class="math inline">\(t\)</span> (<code>rr</code>)</td>
+<td>parameter</td>
+<td>dimensionless</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(w_r\)</span></td>
+<td>Regional welfare weight: how much the planner values region <span class="math inline">\(r\)</span>’s welfare (set by the user, not solved for)</td>
+<td>parameter</td>
+<td>dimensionless</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(U_t\)</span></td>
+<td>Period welfare summed over regions</td>
+<td>variable</td>
+<td>not stated</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\text{scale}_1, \text{scale}_2\)</span></td>
+<td>Constants that rescale the objective for numerical stability</td>
+<td>parameters</td>
+<td>not stated</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(W\)</span></td>
+<td>Total welfare, the objective</td>
+<td>variable</td>
+<td>not stated</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Post-processing</strong></p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Symbol</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><span class="math inline">\(\text{SCC}_{t,r}\)</span></td>
+<td>Social cost of carbon, dollars per tCO<span class="math inline">\(_2\)</span> (unit not commented in the source; implied by the formula)</td>
+</tr>
+<tr class="even">
+<td><span class="math inline">\(\mu_t\)</span></td>
+<td>Global emission control rate, computed after solving</td>
+</tr>
+<tr class="odd">
+<td><span class="math inline">\(\nu^{E}_{t,r}, \nu^{C}_{t,r}\)</span></td>
+<td>Shadow prices (Lagrange multipliers) on the emissions and consumption constraints (<a href="#scc-explainer">explanation</a>)</td>
+</tr>
+</tbody>
+</table>
+<p>Two notes on notation. First, the abatement cost coefficient is written <span class="math inline">\(\kappa\)</span> here, while per capita consumption keeps the lowercase <span class="math inline">\(c\)</span>; the source code uses different names for the two. Second, the shadow prices are written <span class="math inline">\(\nu\)</span> to avoid confusion with the temperature-box response <span class="math inline">\(\lambda_k\)</span>. A superscript or subscript “gross”, “net”, “AT”, or “box” is a label, not an index or exponent.</p>
+</section>
+<section id="economy" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="economy"><span class="header-section-number">3</span> Economy</h2>
+<p><strong>Gross output</strong> (Cobb-Douglas, labor <span class="math inline">\(L\)</span> in millions, capital <span class="math inline">\(K\)</span> in trillion USD):</p>
+<p><span class="math display">\[
+Y^{gross}_{t,r} = A_{t,r}\left(\frac{L_{t,r}}{1000}\right)^{1-\gamma_r} K_{t,r}^{\gamma_r}
+\]</span></p>
+<p><strong>Damages</strong> are a function of atmospheric warming <span class="math inline">\(T^{AT}_t\)</span>:</p>
+<p><span class="math display">\[
+D_{t,r} = a_{1,r}\,T^{AT}_t + a_{2,r}\,(T^{AT}_t)^{a_{3,r}}, \qquad
+\text{Damages}_{t,r} = Y^{gross}_{t,r}\, D_{t,r}
+\]</span></p>
+<p><strong>Output net of damages, and abatement cost:</strong></p>
+<p><span class="math display">\[
+Y^{net}_{t,r} = Y^{gross}_{t,r}\,(1 - D_{t,r}), \qquad
+\Lambda_{t,r} = Y^{gross}_{t,r}\; \kappa_{t,r}\;\mu_{t,r}^{\,\theta_{t,r}}
+\]</span></p>
+<p><strong>Net output, investment, consumption:</strong></p>
+<p><span class="math display">\[
+Y_{t,r} = Y^{net}_{t,r} - \Lambda_{t,r}, \qquad
+I_{t,r} = s_{t,r}\,Y_{t,r}, \qquad
+C_{t,r} = Y_{t,r} - I_{t,r}
+\]</span></p>
+<p><strong>Capital accumulation</strong> (with initial stock <span class="math inline">\(K_{1,r} = k_{0,r}\)</span>, and a lower bound <span class="math inline">\(K \ge 1\)</span>):</p>
+<p><span class="math display">\[
+K_{t,r} \le (1-\delta_r)^{\Delta} K_{t-1,r} + \Delta\, I_{t-1,r}
+\]</span></p>
+<p><strong>Per capita consumption</strong> (thousands of USD):</p>
+<p><span class="math display">\[
+c_{t,r} = \frac{1000\, C_{t,r}}{L_{t,r}}
+\]</span></p>
+<p><strong>Implied carbon price</strong> from the marginal abatement cost:</p>
+<p><span class="math display">\[
+P^{C}_{t,r} = p^{back}_{t,r}\;\mu_{t,r}^{\,\theta_{t,r}-1}
+\]</span></p>
+<p>Global aggregates (<span class="math inline">\(Y\)</span>, <span class="math inline">\(C\)</span>, <span class="math inline">\(I\)</span>, <span class="math inline">\(K\)</span>, damages, abatement cost) are sums over regions, and the global savings rate is <span class="math inline">\(S_t = I_t / Y_t\)</span>. In the last periods (<span class="math inline">\(t \ge 38\)</span>) the global savings rate is fixed at <span class="math inline">\(S_t = 0.28\)</span>. Consumption must satisfy <span class="math inline">\(C_{t,r} \ge 2\)</span> and <span class="math inline">\(c_{t,r} \ge 0.01\)</span>.</p>
+</section>
+<section id="emissions" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="emissions"><span class="header-section-number">4</span> Emissions</h2>
+<p>With emissions intensity <span class="math inline">\(\sigma_{t,r}\)</span> and exogenous land-use emissions <span class="math inline">\(E^{land}_{t,r}\)</span>:</p>
+<p><span class="math display">\[
+E^{ind}_{t,r} = \sigma_{t,r}\,Y^{gross}_{t,r}\,(1-\mu_{t,r})
+\]</span></p>
+<p><span class="math display">\[
+E^{CO_2}_{t,r} = \left(\sigma_{t,r}\,Y^{gross}_{t,r} + E^{land}_{t,r}\right)(1-\mu_{t,r})
+\]</span></p>
+<p><span class="math display">\[
+E^{CO_2e}_{t,r} = \left(\sigma_{t,r}\,Y^{gross}_{t,r} + E^{land}_{t,r} + E^{nonCO_2}_{t,r}\right)(1-\mu_{t,r})
+\]</span></p>
+<p>where <span class="math inline">\(E^{nonCO_2}_{t,r}\)</span> is the baseline abatable non-CO<span class="math inline">\(_2\)</span> GHG emissions (<code>co2e_ghgabateb</code>). Global emissions are regional sums. Cumulative CO<span class="math inline">\(_2\)</span> emissions (GtCO<span class="math inline">\(_2\)</span> converted to GtC):</p>
+<p><span class="math display">\[
+\text{CCATOT}_t = \text{CCATOT}_{t-1} + E^{CO_2}_{t-1}\,\frac{\Delta}{3.666}
+\]</span></p>
+</section>
+<section id="carbon-cycle-four-reservoir-impulse-response" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="carbon-cycle-four-reservoir-impulse-response"><span class="header-section-number">5</span> Carbon cycle (four-reservoir impulse response)</h2>
+<p><strong>What a reservoir is.</strong> A reservoir here is a mathematical pool that holds excess atmospheric CO<span class="math inline">\(_2\)</span> and drains at its own rate. It is not a physical place such as “the ocean” or “the forest.” CO<span class="math inline">\(_2\)</span> does not decay at a single rate after it is emitted: some is absorbed within years, some takes centuries to mix into the deep ocean, and some stays airborne for millennia. A single exponential cannot capture that spread, so DICE sums four exponentials. Pool <span class="math inline">\(j\)</span> receives a fraction <span class="math inline">\(\phi_j\)</span> of each emission (the <span class="math inline">\(\phi_j\)</span> sum to 1) and drains with timescale <span class="math inline">\(\tau_j\)</span>. The pools describe how long carbon stays in the atmosphere, not where it goes. Carbon that leaves the atmosphere ends up in sinks, tracked separately as <span class="math inline">\(\text{CACC}_t\)</span>.</p>
+<div id="cell-fig-reservoirs" class="cell" data-execution_count="1">
+<div class="cell-output cell-output-display">
+<div id="fig-reservoirs" class="quarto-float quarto-figure quarto-figure-center anchored" alt="Line chart with years since the pulse (0 to 500) on the horizontal axis and excess atmospheric carbon in GtC on the vertical axis. Four thin curves show the four reservoirs: the fastest drains to near zero within about 20 years, the next within about 150 years, the third declines slowly over several centuries, and the slowest stays flat near 28 GtC. A thick black curve, the sum of the four, starts at 100 GtC, falls steeply over the first few decades, then declines slowly to about 35 GtC at year 500, still above the slowest reservoir's 28 GtC.">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-reservoirs-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="dice_summary_files/figure-html/fig-reservoirs-output-1.png" alt="Line chart with years since the pulse (0 to 500) on the horizontal axis and excess atmospheric carbon in GtC on the vertical axis. Four thin curves show the four reservoirs: the fastest drains to near zero within about 20 years, the next within about 150 years, the third declines slowly over several centuries, and the slowest stays flat near 28 GtC. A thick black curve, the sum of the four, starts at 100 GtC, falls steeply over the first few decades, then declines slowly to about 35 GtC at year 500, still above the slowest reservoir's 28 GtC." width="593" height="356" class="figure-img">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-reservoirs-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;1: Illustrative decay of a one-time 100 GtC pulse through four reservoirs.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p><a href="#fig-reservoirs" class="quarto-xref">Figure&nbsp;1</a> shows what the four pools do after a single pulse. The fast pools empty quickly, so the total drops steeply at first, then declines only slowly because the slow pools dominate what remains. In this example, more than a third of the pulse is still airborne after 500 years. This is why emissions have effects lasting centuries.</p>
+<p>Each period, every pool loses a fraction of its old contents and gains a share of new emissions (the equation below). The scaling factor <span class="math inline">\(\alpha_t\)</span> multiplies every timescale: when <span class="math inline">\(\alpha_t &gt; 1\)</span> all pools drain more slowly, and the model raises <span class="math inline">\(\alpha_t\)</span> as sinks fill and the planet warms.</p>
+<p>Each reservoir <span class="math inline">\(j \in \{0,1,2,3\}\)</span> has an emission share <span class="math inline">\(\phi_j\)</span> and a timescale <span class="math inline">\(\tau_j\)</span>, with timescales stretched by <span class="math inline">\(\alpha_t\)</span>. Emissions are converted to GtC by dividing by 3.667:</p>
+<p><span class="math display">\[
+R_{j,t} = \phi_j\,\tau_j\,\alpha_t \,\frac{E^{CO_2}_t}{3.667}\left(1 - e^{-\Delta/(\tau_j\alpha_t)}\right) + R_{j,t-1}\,e^{-\Delta/(\tau_j\alpha_t)}
+\]</span></p>
+<p><strong>Atmospheric carbon</strong> is the preindustrial equilibrium plus the reservoir sum:</p>
+<p><span class="math display">\[
+M^{AT}_t = M^{eq} + R_{0,t} + R_{1,t} + R_{2,t} + R_{3,t}, \qquad M^{AT}_t \ge 10
+\]</span></p>
+<p><strong>Carbon in sinks</strong> (ocean and other):</p>
+<p><span class="math display">\[
+\text{CACC}_t = \text{CCATOT}_t - \left(M^{AT}_t - M^{eq}\right)
+\]</span></p>
+<p><strong>The scaling factor <span class="math inline">\(\alpha_t\)</span></strong> is determined by requiring that the 100-year integrated impulse response (IRF100) computed from the reservoirs equals a linear function of accumulated sink carbon and temperature:</p>
+<p><span class="math display">\[
+\underbrace{\sum_{j=0}^{3}\alpha_t\,\phi_j\,\tau_j\left(1 - e^{-100/(\alpha_t \tau_j)}\right)}_{\text{IRF100}_t}
+= \mathit{irf}_0 + \mathit{irc}\cdot \text{CACC}_t + \mathit{irt}\cdot T^{AT}_t
+\]</span></p>
+<p>This makes carbon uptake slow down as sinks fill and as the planet warms.</p>
+</section>
+<section id="climate" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="climate"><span class="header-section-number">6</span> Climate</h2>
+<p><strong>Radiative forcing</strong> from CO<span class="math inline">\(_2\)</span>, exogenous other forcing, and the abatable non-CO<span class="math inline">\(_2\)</span> GHG forcing:</p>
+<p><span class="math display">\[
+F_t = F_{2\times}\,\frac{\ln(M^{AT}_t / M^{eq})}{\ln 2} + F^{misc}_t + \sum_r F^{GHG}_{t,r}
+\]</span></p>
+<p><strong>Abatable non-CO<span class="math inline">\(_2\)</span> forcing</strong> evolves with persistence <span class="math inline">\(f_2\)</span> and an emission response <span class="math inline">\(f_1\)</span>:</p>
+<p><span class="math display">\[
+F^{GHG}_{t,r} = f_2\,F^{GHG}_{t-1,r} + f_1\,E^{nonCO_2}_{t-1,r}\,(1-\mu_{t-1,r})
+\]</span></p>
+<p><strong>Two-box temperature model</strong> (fast and slow boxes, time constants <span class="math inline">\(d_1, d_2\)</span> and equilibrium responses <span class="math inline">\(\lambda_1,\lambda_2\)</span>):</p>
+<p><span class="math display">\[
+T^{box}_{k,t} = T^{box}_{k,t-1}\,e^{-\Delta/d_k} + \lambda_k\,F_t\left(1 - e^{-\Delta/d_k}\right), \qquad k = 1,2
+\]</span></p>
+<p><span class="math display">\[
+T^{AT}_t = T^{box}_{1,t} + T^{box}_{2,t}, \qquad 0.5 \le T^{AT}_t \le 20
+\]</span></p>
+</section>
+<section id="welfare-and-objective" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="welfare-and-objective"><span class="header-section-number">7</span> Welfare and objective</h2>
+<p><strong>Period utility</strong> per capita (CRRA with elasticity <span class="math inline">\(\eta_r\)</span> of marginal utility, <code>elasmu</code>):</p>
+<p><span class="math display">\[
+u_{t,r} = \frac{c_{t,r}^{\,1-\eta_r} - 1}{1-\eta_r} - 1
+\]</span></p>
+<p><strong>Period welfare</strong> weights utility by population <span class="math inline">\(L\)</span>, the social discount factor <span class="math inline">\(\rho_{t,r}\)</span> (<code>rr</code>), and normalized regional welfare weights <span class="math inline">\(w_r\)</span>. The source states that these weights are exogenous and are not Negishi weights:</p>
+<p><span class="math display">\[
+U_t = \sum_r u_{t,r}\; L_{t,r}\;\rho_{t,r}\;\frac{w_r}{\sum_{r'} w_{r'}}
+\]</span></p>
+<p><strong>Objective:</strong></p>
+<p><span class="math display">\[
+\max_{\{\mu_{t,r},\, s_{t,r}\}} \quad W = \Delta \cdot \text{scale}_1 \sum_{t=1}^{T} U_t + \text{scale}_2
+\]</span></p>
+</section>
+<section id="solution-and-post-processing" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="solution-and-post-processing"><span class="header-section-number">8</span> Solution and post-processing</h2>
+<p>The problem is a nonlinear program solved with Ipopt (default up to 3000 iterations, tolerance <span class="math inline">\(10^{-8}\)</span>). Optional user <code>bounds</code> can add scenario constraints of the form <span class="math inline">\(x_{t,r} \le, \ge, = v\)</span> on any model variable, where <span class="math inline">\(v\)</span> may be a scalar, a time vector, or a time-by-region matrix.</p>
+<p>Derived outputs computed after solving:</p>
+<ul>
+<li><strong>Social cost of carbon</strong> (dollars per tCO<span class="math inline">\(_2\)</span>), from the shadow prices of the emissions and consumption constraints: <span class="math display">\[
+\text{SCC}_{t,r} = -1000\,\frac{\nu^{E}_{t,r}}{\nu^{C}_{t,r}}
+\]</span> where <span class="math inline">\(\nu^{E}_{t,r}\)</span> and <span class="math inline">\(\nu^{C}_{t,r}\)</span> are the shadow prices (Lagrange multipliers) on the emissions and consumption constraints. The factor 1000 converts units to dollars per tCO<span class="math inline">\(_2\)</span>. <a href="#scc-explainer">Why is the SCC a ratio of two shadow prices?</a></li>
+<li><strong>Global control rate:</strong> <span class="math inline">\(\mu_t = 1 - \dfrac{\sum_r E^{ind}_{t,r}}{\sum_r \sigma_{t,r}Y^{gross}_{t,r}}\)</span></li>
+<li><strong>Global damage fraction:</strong> <span class="math inline">\(\dfrac{\sum_r D_{t,r}}{\sum_r Y^{gross}_{t,r}}\)</span> (as coded, this sums regional fractions in the numerator, not damages)</li>
+<li><strong>Atmospheric CO<span class="math inline">\(_2\)</span> in ppm:</strong> <span class="math inline">\(M^{AT}_t / 2.13\)</span></li>
+<li><strong>Abatement cost share of output:</strong> <span class="math inline">\(\Lambda_t / Y_t\)</span></li>
+<li><strong>Airborne fractions</strong> relative to 2020 and 1765: <span class="math inline">\(\dfrac{M^{AT}_t - M_0}{\text{CCATOT}_t - \text{cum}_0}\)</span> and <span class="math inline">\(\dfrac{M^{AT}_t - M^{eq}}{\text{CCATOT}_t}\)</span></li>
+<li><strong>Endogenous interest rates</strong> (long and short) from the growth of per capita consumption and the discount factor.</li>
+</ul>
+<div id="scc-explainer" class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center collapsed" data-bs-toggle="collapse" data-bs-target=".callout-1-contents" aria-controls="callout-1" aria-expanded="false" aria-label="Toggle callout">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Why is the SCC a ratio of two shadow prices?
+</div>
+<div class="callout-btn-toggle d-inline-block border-0 py-1 ps-1 pe-0 float-end"><i class="callout-toggle"></i></div>
+</div>
+<div id="callout-1" class="callout-1-contents callout-collapse collapse">
+<div class="callout-body-container callout-body">
+<p><strong>The two constraints.</strong> The <em>emissions constraint</em> is the equation that defines regional CO<span class="math inline">\(_2\)</span> emissions, <span class="math inline">\(E^{CO_2}_{t,r} = (\sigma_{t,r}Y^{gross}_{t,r} + E^{land}_{t,r})(1-\mu_{t,r})\)</span>. The <em>consumption constraint</em> is the accounting rule <span class="math inline">\(C_{t,r} = Y_{t,r} - I_{t,r}\)</span>.</p>
+<p><strong>What a Lagrange multiplier is.</strong> Each constraint has a Lagrange multiplier, also called a shadow price or dual value. It answers one question: <em>if this constraint were relaxed by one unit, how much would the best achievable welfare change?</em> For example, if you maximize happiness subject to a $100 budget and a 101st dollar would raise the best achievable happiness by 0.3, the multiplier on the budget constraint is 0.3.</p>
+<p><strong>Two experiments.</strong> The two multipliers correspond to two “what if” questions, shown below.</p>
+<ul>
+<li>Relax the emissions constraint so that emissions are one GtCO<span class="math inline">\(_2\)</span> higher than the economy would otherwise produce. The extra carbon warms the climate and raises damages, so welfare falls. The multiplier <span class="math inline">\(\nu^{E}\)</span> is therefore negative, in welfare units per GtCO<span class="math inline">\(_2\)</span>.</li>
+<li>Relax the consumption constraint so there is one more trillion USD of consumption. Welfare rises. The multiplier <span class="math inline">\(\nu^{C}\)</span> is positive, in welfare units per trillion USD.</li>
+</ul>
+<figure style="margin: 1.25rem 0;" class="figure">
+<svg viewbox="0 0 800 410" role="img" aria-labelledby="scc-fig-title scc-fig-desc" style="width:100%; max-width:800px; height:auto; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;">
+  <title id="scc-fig-title">How the social cost of carbon is built from two shadow prices</title>
+  <desc id="scc-fig-desc">Two side-by-side flow charts feed one result box. Left: one more GtCO2 emitted leads to a warmer climate and larger damages, so welfare falls; its shadow price, nu E, is negative. Right: one more trillion USD of consumption leads to higher consumption per person, so welfare rises; its shadow price, nu C, is positive. Both results feed a box reading SCC equals minus 1000 times nu E divided by nu C, in which the welfare units cancel and the answer is in US dollars per tonne of CO2.</desc>
+  <defs>
+    <marker id="scc-arrow" viewbox="0 0 10 10" refx="9" refy="5" markerwidth="7" markerheight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1b1f24"></path>
+    </marker>
+  </defs>
+  <g fill="none" stroke-width="2">
+    <rect x="20" y="20" width="360" height="250" rx="10" fill="#fff" stroke="#D55E00"></rect>
+    <rect x="420" y="20" width="360" height="250" rx="10" fill="#fff" stroke="#0072B2"></rect>
+  </g>
+  <g font-size="18" font-weight="700" fill="#1b1f24" text-anchor="middle">
+    <text x="200" y="48">Experiment 1: emit one more GtCO<tspan dy="4" font-size="13">2</tspan></text>
+    <text x="600" y="48">Experiment 2: one more trillion USD</text>
+  </g>
+  <g stroke="#1b1f24" stroke-width="1.5" fill="#f6f8fa">
+    <rect x="40" y="66" width="320" height="44" rx="6"></rect>
+    <rect x="40" y="136" width="320" height="44" rx="6"></rect>
+    <rect x="40" y="206" width="320" height="44" rx="6" fill="#FBE3D3" stroke="#D55E00" stroke-width="2"></rect>
+    <rect x="440" y="66" width="320" height="44" rx="6"></rect>
+    <rect x="440" y="136" width="320" height="44" rx="6"></rect>
+    <rect x="440" y="206" width="320" height="44" rx="6" fill="#D6E9F5" stroke="#0072B2" stroke-width="2"></rect>
+  </g>
+  <g stroke="#1b1f24" stroke-width="2" fill="none" marker-end="url(#scc-arrow)">
+    <path d="M200 110 V134"></path><path d="M200 180 V204"></path>
+    <path d="M600 110 V134"></path><path d="M600 180 V204"></path>
+    <path d="M200 270 V292 H340 V316"></path><path d="M600 270 V292 H460 V316"></path>
+  </g>
+  <g font-size="17" fill="#1b1f24" text-anchor="middle">
+    <text x="200" y="93">One more GtCO<tspan dy="4" font-size="12">2</tspan><tspan dy="-4"> is emitted</tspan></text>
+    <text x="200" y="163">Warmer climate, larger damages</text>
+    <text x="200" y="233" font-weight="700">Welfare falls: ν<tspan dy="-6" font-size="15">E</tspan><tspan dy="6"> &lt; 0</tspan></text>
+    <text x="600" y="93">One more trillion USD of consumption</text>
+    <text x="600" y="163">Higher consumption per person</text>
+    <text x="600" y="233" font-weight="700">Welfare rises: ν<tspan dy="-6" font-size="15">C</tspan><tspan dy="6"> &gt; 0</tspan></text>
+  </g>
+  <rect x="200" y="318" width="400" height="76" rx="8" fill="#fff" stroke="#1b1f24" stroke-width="2"></rect>
+  <g fill="#1b1f24" text-anchor="middle">
+    <text x="400" y="349" font-size="23" font-weight="700">SCC = −1000 × ν<tspan dy="-7" font-size="15">E</tspan><tspan dy="7"> / ν</tspan><tspan dy="-7" font-size="15">C</tspan></text>
+    <text x="400" y="378" font-size="16">Welfare units cancel. The result is USD per tCO<tspan dy="4" font-size="12">2</tspan></text>
+  </g>
+</svg>
+<figcaption style="font-size:0.9rem; color:#57606a; margin-top:0.4rem;">The SCC divides the welfare cost of one more GtCO<sub>2</sub> by the welfare value of one more trillion USD of consumption.</figcaption>
+</figure>
+<p><strong>Why the ratio.</strong> Dividing one multiplier by the other cancels the welfare units, which have no meaning you can act on. What remains is trillion USD per GtCO<span class="math inline">\(_2\)</span>: the amount of consumption that would leave society exactly as well off as one more tonne of CO<span class="math inline">\(_2\)</span> would make it worse off. The factor 1000 converts trillion USD per GtCO<span class="math inline">\(_2\)</span> into USD per tCO<span class="math inline">\(_2\)</span>, the minus sign makes the SCC positive, and the code adds 0.00001 to the denominator to avoid dividing by zero.</p>
+<p><strong>Caveats.</strong> The signs depend on how the solver (Ipopt through JuMP) reports duals for a maximization problem; the formula’s leading minus sign assumes <span class="math inline">\(\nu^{E}\)</span> comes out negative. The multipliers also include the welfare weights <span class="math inline">\(w_r\)</span>, the discount factor, and population, because those sit inside the objective.</p>
+</div>
+</div>
+</div>
+</section>
+<section id="notes-on-the-implementation" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="notes-on-the-implementation"><span class="header-section-number">9</span> Notes on the implementation</h2>
+<ul>
+<li>Several stocks (capital) use inequality constraints (<code>&lt;=</code>) rather than equality; this is harmless in an optimum where investment is valuable.</li>
+<li>The emissions unit conversion uses 3.667 in the reservoir equations but 3.666 in cumulative emissions.</li>
+<li>Initial conditions for each reservoir, temperature box, and the stocks are set in period 1 from parameters.</li>
+<li>The global damage fraction in post-processing is a sum of regional fractions over total gross output, which differs from the damage-weighted ratio <span class="math inline">\(\sum_r \text{Damages}_{t,r} / \sum_r Y^{gross}_{t,r}\)</span>.</li>
+</ul>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

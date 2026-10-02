@@ -1,0 +1,406 @@
+---
+title: "Summary of the DICE-2023 Core Model (DICEModel.jl)"
+format:
+  html:
+    toc: true
+    number-sections: true
+    include-in-header: dice_tooltips.html
+---
+
+Source: `src/CoreModel.jl` in [DICEModel.jl](https://github.com/sylvaticus/DICEModel.jl) (MIT license). This is a regionalized implementation of DICE-2023 in Julia/JuMP, solved with Ipopt. Numeric parameter values live in the `DICEParameters` struct and are not reproduced here.
+
+*Hover over (or tap) any symbol in an equation to see what it means and whether it is a variable or a parameter.*
+
+## Overview
+
+DICE is an optimal growth model coupled to a simple climate model. A social planner chooses, for each period $t$ and region $r$:
+
+- the **emission control rate** $\mu_{t,r}$ (`MIU_R`, bounded by $0 \le \mu \le \bar\mu_{t,r}$),
+- the **savings rate** $s_{t,r}$ (`S_R`, $0 \le s \le 1$),
+- the **carbon-cycle decay scaling** $\alpha_t$ (`ALPHA`, $0.1 \le \alpha \le 100$), which is pinned down by an equation rather than being a true policy choice.
+
+The planner maximizes discounted, population-weighted welfare subject to the economy, emissions, carbon cycle, and temperature equations below. Time steps are of length $\Delta$ (`tstep`) years, indexed $t = 1,\dots,T$; regions are indexed $r$.
+
+## Notation {#sec-notation}
+
+All symbols are indexed by period $t$ and, where relevant, region $r$. Unless noted, "parameter" means an exogenous input and "variable" means something the model solves for. Symbols are grouped by the section where they first appear. The Unit column gives units stated in the comments of the source code (`CoreModel.jl`). Units marked "implied" are not commented in the source but follow directly from the equations, and "not stated" means neither applies. Dollar amounts are in 2019 US dollars.
+
+**Indices and time**
+
+| Symbol | Meaning |
+|---|---|
+| $t$, $T$ | Time period and number of periods |
+| $r$, $r'$ | Region (and a dummy region used inside sums) |
+| $\Delta$ | Length of a time step in years (`tstep`) |
+| $j$ | Carbon-cycle reservoir, $j = 0,\dots,3$ |
+| $k$ | Temperature box, $k = 1$ (fast) or $2$ (slow) |
+
+**Economy**
+
+| Symbol | Meaning | Type | Unit |
+|---|---|---|---|
+| $\mu_{t,r}$ | Emission control rate: fraction of baseline emissions abated | variable (decision) | fraction (0 to 1) |
+| $s_{t,r}$ | Savings rate: fraction of output invested | variable (decision) | fraction (0 to 1) |
+| $\bar\mu_{t,r}$ | Upper bound on the emission control rate (time- and region-specific) | parameter | fraction |
+| $A_{t,r}$ | Total factor productivity | parameter | not stated |
+| $L_{t,r}$ | Population (labor) | parameter | millions |
+| $K_{t,r}$ | Capital stock | variable | trillion 2019 USD |
+| $k_{0,r}$ | Initial capital stock | parameter | trillion 2019 USD (implied) |
+| $\gamma_r$ | Capital share of output | parameter | fraction |
+| $\delta_r$ | Annual capital depreciation rate | parameter | per year |
+| $Y^{gross}_{t,r}$ | Output before damages and abatement costs | variable | trillion 2019 USD per year |
+| $a_{1,r}, a_{2,r}, a_{3,r}$ | Damage function coefficients; $a_3$ is the exponent on temperature | parameters | $a_1$: per $^\circ$C; $a_2$: per $(^\circ$C$)^{a_3}$; $a_3$: dimensionless (all implied) |
+| $D_{t,r}$ | Damage fraction of gross output | variable | fraction |
+| $\text{Damages}_{t,r}$ | Climate damages: gross output times the damage fraction | variable | trillion 2019 USD per year |
+| $Y^{net}_{t,r}$ | Output after damages | variable | trillion 2019 USD per year |
+| $\kappa_{t,r}$ | Abatement cost coefficient (cost of full abatement as a fraction of gross output) | parameter | fraction of gross output |
+| $\theta_{t,r}$ | Exponent of the abatement cost curve | parameter | dimensionless |
+| $\Lambda_{t,r}$ | Abatement cost | variable | trillion 2019 USD per year |
+| $Y_{t,r}$ | Output net of damages and abatement cost | variable | trillion 2019 USD per year |
+| $I_{t,r}$ | Investment | variable | trillion 2019 USD per year |
+| $C_{t,r}$ | Total consumption | variable | trillion 2019 USD per year |
+| $c_{t,r}$ | Per capita consumption | variable | thousand 2019 USD per year |
+| $p^{back}_{t,r}$ | Backstop price: cost of fully abating emissions | parameter | 2019 USD per tCO$_2$ (inferred from the carbon price equation) |
+| $P^{C}_{t,r}$ | Implied carbon price | variable | 2019 USD per tCO$_2$ |
+| $S_t$ | Global savings rate, $I_t/Y_t$ | variable | fraction |
+
+**Emissions**
+
+| Symbol | Meaning | Type | Unit |
+|---|---|---|---|
+| $\sigma_{t,r}$ | Emissions intensity: emissions per unit of gross output with no abatement | parameter | GtCO$_2$ per trillion 2019 USD (implied) |
+| $E^{land}_{t,r}$ | Land-use CO$_2$ emissions | parameter | GtCO$_2$ per year (implied) |
+| $E^{nonCO_2}_{t,r}$ | Baseline abatable non-CO$_2$ greenhouse gas emissions, in CO$_2$-equivalent | parameter | GtCO$_2$ per year (implied) |
+| $E^{ind}_{t,r}$ | Industrial CO$_2$ emissions after abatement | variable | GtCO$_2$ per year |
+| $E^{CO_2}_{t,r}$ | Total CO$_2$ emissions (industrial plus land use) after abatement | variable | GtCO$_2$ per year |
+| $E^{CO_2e}_{t,r}$ | Total greenhouse gas emissions in CO$_2$-equivalent after abatement | variable | GtCO$_2$ per year |
+| $\text{CCATOT}_t$ | Cumulative CO$_2$ emissions | variable | GtC |
+| 3.666, 3.667 | Conversion factors from GtCO$_2$ to GtC (molecular weight ratio 44/12) | constants | GtCO$_2$ per GtC |
+
+**Carbon cycle**
+
+| Symbol | Meaning | Type | Unit |
+|---|---|---|---|
+| $R_{j,t}$ | Atmospheric carbon held in reservoir $j$ above the preindustrial level | variable | GtC |
+| $\phi_j$ | Fraction of an emission pulse that goes to reservoir $j$ (the $\phi_j$ sum to 1) | parameter | fraction |
+| $\tau_j$ | Base decay timescale of reservoir $j$ | parameter | years |
+| $\alpha_t$ | Scaling factor that lengthens or shortens all timescales as sinks saturate | variable | dimensionless |
+| $M^{AT}_t$ | Atmospheric carbon stock | variable | GtC |
+| $M^{eq}$ | Preindustrial equilibrium atmospheric carbon | parameter | GtC (implied) |
+| $M_0$ | Atmospheric carbon in the initial year (2020) | parameter | GtC (implied) |
+| $\text{cum}_0$ | Cumulative emissions in the initial year | parameter | GtC (implied) |
+| $\text{CACC}_t$ | Carbon accumulated in sinks (ocean and land) | variable | GtC |
+| $\text{IRF100}_t$ | 100-year integrated impulse response: the time-integrated airborne fraction of a carbon pulse over 100 years | variable | years (implied) |
+| $\mathit{irf}_0, \mathit{irc}, \mathit{irt}$ | Intercept, sink-saturation slope, and temperature slope of the linear IRF100 relationship | parameters | years; years per GtC; years per $^\circ$C (all implied) |
+
+**Climate**
+
+| Symbol | Meaning | Type | Unit |
+|---|---|---|---|
+| $F_t$ | Total radiative forcing | variable | W/m$^2$ |
+| $F_{2\times}$ | Forcing from a doubling of atmospheric CO$_2$ | parameter | W/m$^2$ (implied) |
+| $F^{misc}_t$ | Exogenous forcing from other sources (aerosols, other gases) | parameter | W/m$^2$ (implied) |
+| $F^{GHG}_{t,r}$ | Forcing from abatable non-CO$_2$ gases | variable | W/m$^2$ (implied) |
+| $f_1$ | Forcing added per unit of non-CO$_2$ emissions | parameter | W/m$^2$ per (GtCO$_2$ per year) (implied) |
+| $f_2$ | Fraction of last period's non-CO$_2$ forcing that persists | parameter | fraction |
+| $T^{box}_{k,t}$ | Temperature anomaly of box $k$ | variable | $^\circ$C |
+| $d_k$ | Response time of box $k$ | parameter | years |
+| $\lambda_k$ | Equilibrium temperature response of box $k$ per unit forcing | parameter | $^\circ$C per W/m$^2$ (implied) |
+| $T^{AT}_t$ | Atmospheric temperature change above preindustrial | variable | $^\circ$C above the 1765 level |
+
+**Welfare**
+
+| Symbol | Meaning | Type | Unit |
+|---|---|---|---|
+| $\eta_r$ | Elasticity of marginal utility of consumption (`elasmu`); higher values mean more aversion to inequality across time and regions | parameter | dimensionless |
+| $u_{t,r}$ | Per capita utility in a period | variable | not stated |
+| $\rho_{t,r}$ | Social discount factor applied to period $t$ (`rr`) | parameter | dimensionless |
+| $w_r$ | Regional welfare weight: how much the planner values region $r$'s welfare (set by the user, not solved for) | parameter | dimensionless |
+| $U_t$ | Period welfare summed over regions | variable | not stated |
+| $\text{scale}_1, \text{scale}_2$ | Constants that rescale the objective for numerical stability | parameters | not stated |
+| $W$ | Total welfare, the objective | variable | not stated |
+
+**Post-processing**
+
+| Symbol | Meaning |
+|---|---|
+| $\text{SCC}_{t,r}$ | Social cost of carbon, dollars per tCO$_2$ (unit not commented in the source; implied by the formula) |
+| $\mu_t$ | Global emission control rate, computed after solving |
+| $\nu^{E}_{t,r}, \nu^{C}_{t,r}$ | Shadow prices (Lagrange multipliers) on the emissions and consumption constraints ([explanation](#scc-explainer)) |
+
+Two notes on notation. First, the abatement cost coefficient is written $\kappa$ here, while per capita consumption keeps the lowercase $c$; the source code uses different names for the two. Second, the shadow prices are written $\nu$ to avoid confusion with the temperature-box response $\lambda_k$. A superscript or subscript "gross", "net", "AT", or "box" is a label, not an index or exponent.
+
+## Economy
+
+**Gross output** (Cobb-Douglas, labor $L$ in millions, capital $K$ in trillion USD):
+
+$$
+Y^{gross}_{t,r} = A_{t,r}\left(\frac{L_{t,r}}{1000}\right)^{1-\gamma_r} K_{t,r}^{\gamma_r}
+$$
+
+**Damages** are a function of atmospheric warming $T^{AT}_t$:
+
+$$
+D_{t,r} = a_{1,r}\,T^{AT}_t + a_{2,r}\,(T^{AT}_t)^{a_{3,r}}, \qquad
+\text{Damages}_{t,r} = Y^{gross}_{t,r}\, D_{t,r}
+$$
+
+**Output net of damages, and abatement cost:**
+
+$$
+Y^{net}_{t,r} = Y^{gross}_{t,r}\,(1 - D_{t,r}), \qquad
+\Lambda_{t,r} = Y^{gross}_{t,r}\; \kappa_{t,r}\;\mu_{t,r}^{\,\theta_{t,r}}
+$$
+
+**Net output, investment, consumption:**
+
+$$
+Y_{t,r} = Y^{net}_{t,r} - \Lambda_{t,r}, \qquad
+I_{t,r} = s_{t,r}\,Y_{t,r}, \qquad
+C_{t,r} = Y_{t,r} - I_{t,r}
+$$
+
+**Capital accumulation** (with initial stock $K_{1,r} = k_{0,r}$, and a lower bound $K \ge 1$):
+
+$$
+K_{t,r} \le (1-\delta_r)^{\Delta} K_{t-1,r} + \Delta\, I_{t-1,r}
+$$
+
+**Per capita consumption** (thousands of USD):
+
+$$
+c_{t,r} = \frac{1000\, C_{t,r}}{L_{t,r}}
+$$
+
+**Implied carbon price** from the marginal abatement cost:
+
+$$
+P^{C}_{t,r} = p^{back}_{t,r}\;\mu_{t,r}^{\,\theta_{t,r}-1}
+$$
+
+Global aggregates ($Y$, $C$, $I$, $K$, damages, abatement cost) are sums over regions, and the global savings rate is $S_t = I_t / Y_t$. In the last periods ($t \ge 38$) the global savings rate is fixed at $S_t = 0.28$. Consumption must satisfy $C_{t,r} \ge 2$ and $c_{t,r} \ge 0.01$.
+
+## Emissions
+
+With emissions intensity $\sigma_{t,r}$ and exogenous land-use emissions $E^{land}_{t,r}$:
+
+$$
+E^{ind}_{t,r} = \sigma_{t,r}\,Y^{gross}_{t,r}\,(1-\mu_{t,r})
+$$
+
+$$
+E^{CO_2}_{t,r} = \left(\sigma_{t,r}\,Y^{gross}_{t,r} + E^{land}_{t,r}\right)(1-\mu_{t,r})
+$$
+
+$$
+E^{CO_2e}_{t,r} = \left(\sigma_{t,r}\,Y^{gross}_{t,r} + E^{land}_{t,r} + E^{nonCO_2}_{t,r}\right)(1-\mu_{t,r})
+$$
+
+where $E^{nonCO_2}_{t,r}$ is the baseline abatable non-CO$_2$ GHG emissions (`co2e_ghgabateb`). Global emissions are regional sums. Cumulative CO$_2$ emissions (GtCO$_2$ converted to GtC):
+
+$$
+\text{CCATOT}_t = \text{CCATOT}_{t-1} + E^{CO_2}_{t-1}\,\frac{\Delta}{3.666}
+$$
+
+## Carbon cycle (four-reservoir impulse response)
+
+**What a reservoir is.** A reservoir here is a mathematical pool that holds excess atmospheric CO$_2$ and drains at its own rate. It is not a physical place such as "the ocean" or "the forest." CO$_2$ does not decay at a single rate after it is emitted: some is absorbed within years, some takes centuries to mix into the deep ocean, and some stays airborne for millennia. A single exponential cannot capture that spread, so DICE sums four exponentials. Pool $j$ receives a fraction $\phi_j$ of each emission (the $\phi_j$ sum to 1) and drains with timescale $\tau_j$. The pools describe how long carbon stays in the atmosphere, not where it goes. Carbon that leaves the atmosphere ends up in sinks, tracked separately as $\text{CACC}_t$.
+
+```{python}
+#| label: fig-reservoirs
+#| echo: false
+#| fig-cap: "Illustrative decay of a one-time 100 GtC pulse through four reservoirs."
+#| fig-alt: "Line chart with years since the pulse (0 to 500) on the horizontal axis and excess atmospheric carbon in GtC on the vertical axis. Four thin curves show the four reservoirs: the fastest drains to near zero within about 20 years, the next within about 150 years, the third declines slowly over several centuries, and the slowest stays flat near 28 GtC. A thick black curve, the sum of the four, starts at 100 GtC, falls steeply over the first few decades, then declines slowly to about 35 GtC at year 500, still above the slowest reservoir's 28 GtC."
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Illustrative values only (roughly the shape of published impulse-response
+# fits); these are NOT the DICEParameters values.
+phi = np.array([0.22, 0.22, 0.28, 0.28])
+tau = np.array([4.0, 35.0, 350.0, 1e9])
+pulse = 100.0  # GtC
+yrs = np.linspace(0, 500, 501)
+
+fig, ax = plt.subplots(figsize=(7, 4))
+colors = ["#0072B2", "#E69F00", "#009E73", "#CC79A7"]
+styles = ["-", "--", "-.", ":"]
+labels = [r"$j=0$, $\tau$ = 4 yr", r"$j=1$, $\tau$ = 35 yr",
+          r"$j=2$, $\tau$ = 350 yr", r"$j=3$, effectively permanent"]
+total = np.zeros_like(yrs)
+for p, t, c, s, lab in zip(phi, tau, colors, styles, labels):
+    r = pulse * p * np.exp(-yrs / t)
+    total += r
+    ax.plot(yrs, r, color=c, ls=s, lw=1.8, label=lab)
+ax.plot(yrs, total, color="black", lw=2.8, label="Sum of all four")
+ax.set_xlabel("Years since the pulse")
+ax.set_ylabel("Excess atmospheric carbon (GtC)")
+ax.legend(frameon=False)
+ax.spines[["top", "right"]].set_visible(False)
+plt.show()
+```
+
+@fig-reservoirs shows what the four pools do after a single pulse. The fast pools empty quickly, so the total drops steeply at first, then declines only slowly because the slow pools dominate what remains. In this example, more than a third of the pulse is still airborne after 500 years. This is why emissions have effects lasting centuries.
+
+Each period, every pool loses a fraction of its old contents and gains a share of new emissions (the equation below). The scaling factor $\alpha_t$ multiplies every timescale: when $\alpha_t > 1$ all pools drain more slowly, and the model raises $\alpha_t$ as sinks fill and the planet warms.
+
+Each reservoir $j \in \{0,1,2,3\}$ has an emission share $\phi_j$ and a timescale $\tau_j$, with timescales stretched by $\alpha_t$. Emissions are converted to GtC by dividing by 3.667:
+
+$$
+R_{j,t} = \phi_j\,\tau_j\,\alpha_t \,\frac{E^{CO_2}_t}{3.667}\left(1 - e^{-\Delta/(\tau_j\alpha_t)}\right) + R_{j,t-1}\,e^{-\Delta/(\tau_j\alpha_t)}
+$$
+
+**Atmospheric carbon** is the preindustrial equilibrium plus the reservoir sum:
+
+$$
+M^{AT}_t = M^{eq} + R_{0,t} + R_{1,t} + R_{2,t} + R_{3,t}, \qquad M^{AT}_t \ge 10
+$$
+
+**Carbon in sinks** (ocean and other):
+
+$$
+\text{CACC}_t = \text{CCATOT}_t - \left(M^{AT}_t - M^{eq}\right)
+$$
+
+**The scaling factor $\alpha_t$** is determined by requiring that the 100-year integrated impulse response (IRF100) computed from the reservoirs equals a linear function of accumulated sink carbon and temperature:
+
+$$
+\underbrace{\sum_{j=0}^{3}\alpha_t\,\phi_j\,\tau_j\left(1 - e^{-100/(\alpha_t \tau_j)}\right)}_{\text{IRF100}_t}
+= \mathit{irf}_0 + \mathit{irc}\cdot \text{CACC}_t + \mathit{irt}\cdot T^{AT}_t
+$$
+
+This makes carbon uptake slow down as sinks fill and as the planet warms.
+
+## Climate
+
+**Radiative forcing** from CO$_2$, exogenous other forcing, and the abatable non-CO$_2$ GHG forcing:
+
+$$
+F_t = F_{2\times}\,\frac{\ln(M^{AT}_t / M^{eq})}{\ln 2} + F^{misc}_t + \sum_r F^{GHG}_{t,r}
+$$
+
+**Abatable non-CO$_2$ forcing** evolves with persistence $f_2$ and an emission response $f_1$:
+
+$$
+F^{GHG}_{t,r} = f_2\,F^{GHG}_{t-1,r} + f_1\,E^{nonCO_2}_{t-1,r}\,(1-\mu_{t-1,r})
+$$
+
+**Two-box temperature model** (fast and slow boxes, time constants $d_1, d_2$ and equilibrium responses $\lambda_1,\lambda_2$):
+
+$$
+T^{box}_{k,t} = T^{box}_{k,t-1}\,e^{-\Delta/d_k} + \lambda_k\,F_t\left(1 - e^{-\Delta/d_k}\right), \qquad k = 1,2
+$$
+
+$$
+T^{AT}_t = T^{box}_{1,t} + T^{box}_{2,t}, \qquad 0.5 \le T^{AT}_t \le 20
+$$
+
+## Welfare and objective
+
+**Period utility** per capita (CRRA with elasticity $\eta_r$ of marginal utility, `elasmu`):
+
+$$
+u_{t,r} = \frac{c_{t,r}^{\,1-\eta_r} - 1}{1-\eta_r} - 1
+$$
+
+**Period welfare** weights utility by population $L$, the social discount factor $\rho_{t,r}$ (`rr`), and normalized regional welfare weights $w_r$. The source states that these weights are exogenous and are not Negishi weights:
+
+$$
+U_t = \sum_r u_{t,r}\; L_{t,r}\;\rho_{t,r}\;\frac{w_r}{\sum_{r'} w_{r'}}
+$$
+
+**Objective:**
+
+$$
+\max_{\{\mu_{t,r},\, s_{t,r}\}} \quad W = \Delta \cdot \text{scale}_1 \sum_{t=1}^{T} U_t + \text{scale}_2
+$$
+
+## Solution and post-processing
+
+The problem is a nonlinear program solved with Ipopt (default up to 3000 iterations, tolerance $10^{-8}$). Optional user `bounds` can add scenario constraints of the form $x_{t,r} \le, \ge, = v$ on any model variable, where $v$ may be a scalar, a time vector, or a time-by-region matrix.
+
+Derived outputs computed after solving:
+
+- **Social cost of carbon** (dollars per tCO$_2$), from the shadow prices of the emissions and consumption constraints:
+$$
+\text{SCC}_{t,r} = -1000\,\frac{\nu^{E}_{t,r}}{\nu^{C}_{t,r}}
+$$
+  where $\nu^{E}_{t,r}$ and $\nu^{C}_{t,r}$ are the shadow prices (Lagrange multipliers) on the emissions and consumption constraints. The factor 1000 converts units to dollars per tCO$_2$. [Why is the SCC a ratio of two shadow prices?](#scc-explainer)
+- **Global control rate:** $\mu_t = 1 - \dfrac{\sum_r E^{ind}_{t,r}}{\sum_r \sigma_{t,r}Y^{gross}_{t,r}}$
+- **Global damage fraction:** $\dfrac{\sum_r D_{t,r}}{\sum_r Y^{gross}_{t,r}}$ (as coded, this sums regional fractions in the numerator, not damages)
+- **Atmospheric CO$_2$ in ppm:** $M^{AT}_t / 2.13$
+- **Abatement cost share of output:** $\Lambda_t / Y_t$
+- **Airborne fractions** relative to 2020 and 1765: $\dfrac{M^{AT}_t - M_0}{\text{CCATOT}_t - \text{cum}_0}$ and $\dfrac{M^{AT}_t - M^{eq}}{\text{CCATOT}_t}$
+- **Endogenous interest rates** (long and short) from the growth of per capita consumption and the discount factor.
+
+::: {#scc-explainer .callout-note collapse="true"}
+## Why is the SCC a ratio of two shadow prices?
+
+**The two constraints.** The *emissions constraint* is the equation that defines regional CO$_2$ emissions, $E^{CO_2}_{t,r} = (\sigma_{t,r}Y^{gross}_{t,r} + E^{land}_{t,r})(1-\mu_{t,r})$. The *consumption constraint* is the accounting rule $C_{t,r} = Y_{t,r} - I_{t,r}$.
+
+**What a Lagrange multiplier is.** Each constraint has a Lagrange multiplier, also called a shadow price or dual value. It answers one question: *if this constraint were relaxed by one unit, how much would the best achievable welfare change?* For example, if you maximize happiness subject to a \$100 budget and a 101st dollar would raise the best achievable happiness by 0.3, the multiplier on the budget constraint is 0.3.
+
+**Two experiments.** The two multipliers correspond to two "what if" questions, shown below.
+
+- Relax the emissions constraint so that emissions are one GtCO$_2$ higher than the economy would otherwise produce. The extra carbon warms the climate and raises damages, so welfare falls. The multiplier $\nu^{E}$ is therefore negative, in welfare units per GtCO$_2$.
+- Relax the consumption constraint so there is one more trillion USD of consumption. Welfare rises. The multiplier $\nu^{C}$ is positive, in welfare units per trillion USD.
+
+```{=html}
+<figure style="margin: 1.25rem 0;">
+<svg viewBox="0 0 800 410" role="img" aria-labelledby="scc-fig-title scc-fig-desc" style="width:100%; max-width:800px; height:auto; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;">
+  <title id="scc-fig-title">How the social cost of carbon is built from two shadow prices</title>
+  <desc id="scc-fig-desc">Two side-by-side flow charts feed one result box. Left: one more GtCO2 emitted leads to a warmer climate and larger damages, so welfare falls; its shadow price, nu E, is negative. Right: one more trillion USD of consumption leads to higher consumption per person, so welfare rises; its shadow price, nu C, is positive. Both results feed a box reading SCC equals minus 1000 times nu E divided by nu C, in which the welfare units cancel and the answer is in US dollars per tonne of CO2.</desc>
+  <defs>
+    <marker id="scc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1b1f24"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke-width="2">
+    <rect x="20" y="20" width="360" height="250" rx="10" fill="#fff" stroke="#D55E00"/>
+    <rect x="420" y="20" width="360" height="250" rx="10" fill="#fff" stroke="#0072B2"/>
+  </g>
+  <g font-size="18" font-weight="700" fill="#1b1f24" text-anchor="middle">
+    <text x="200" y="48">Experiment 1: emit one more GtCO<tspan dy="4" font-size="13">2</tspan></text>
+    <text x="600" y="48">Experiment 2: one more trillion USD</text>
+  </g>
+  <g stroke="#1b1f24" stroke-width="1.5" fill="#f6f8fa">
+    <rect x="40" y="66" width="320" height="44" rx="6"/>
+    <rect x="40" y="136" width="320" height="44" rx="6"/>
+    <rect x="40" y="206" width="320" height="44" rx="6" fill="#FBE3D3" stroke="#D55E00" stroke-width="2"/>
+    <rect x="440" y="66" width="320" height="44" rx="6"/>
+    <rect x="440" y="136" width="320" height="44" rx="6"/>
+    <rect x="440" y="206" width="320" height="44" rx="6" fill="#D6E9F5" stroke="#0072B2" stroke-width="2"/>
+  </g>
+  <g stroke="#1b1f24" stroke-width="2" fill="none" marker-end="url(#scc-arrow)">
+    <path d="M200 110 V134"/><path d="M200 180 V204"/>
+    <path d="M600 110 V134"/><path d="M600 180 V204"/>
+    <path d="M200 270 V292 H340 V316"/><path d="M600 270 V292 H460 V316"/>
+  </g>
+  <g font-size="17" fill="#1b1f24" text-anchor="middle">
+    <text x="200" y="93">One more GtCO<tspan dy="4" font-size="12">2</tspan><tspan dy="-4"> is emitted</tspan></text>
+    <text x="200" y="163">Warmer climate, larger damages</text>
+    <text x="200" y="233" font-weight="700">Welfare falls: &#957;<tspan dy="-6" font-size="15">E</tspan><tspan dy="6"> &lt; 0</tspan></text>
+    <text x="600" y="93">One more trillion USD of consumption</text>
+    <text x="600" y="163">Higher consumption per person</text>
+    <text x="600" y="233" font-weight="700">Welfare rises: &#957;<tspan dy="-6" font-size="15">C</tspan><tspan dy="6"> &gt; 0</tspan></text>
+  </g>
+  <rect x="200" y="318" width="400" height="76" rx="8" fill="#fff" stroke="#1b1f24" stroke-width="2"/>
+  <g fill="#1b1f24" text-anchor="middle">
+    <text x="400" y="349" font-size="23" font-weight="700">SCC = &#8722;1000 &#215; &#957;<tspan dy="-7" font-size="15">E</tspan><tspan dy="7"> / &#957;</tspan><tspan dy="-7" font-size="15">C</tspan></text>
+    <text x="400" y="378" font-size="16">Welfare units cancel. The result is USD per tCO<tspan dy="4" font-size="12">2</tspan></text>
+  </g>
+</svg>
+<figcaption style="font-size:0.9rem; color:#57606a; margin-top:0.4rem;">The SCC divides the welfare cost of one more GtCO<sub>2</sub> by the welfare value of one more trillion USD of consumption.</figcaption>
+</figure>
+```
+
+**Why the ratio.** Dividing one multiplier by the other cancels the welfare units, which have no meaning you can act on. What remains is trillion USD per GtCO$_2$: the amount of consumption that would leave society exactly as well off as one more tonne of CO$_2$ would make it worse off. The factor 1000 converts trillion USD per GtCO$_2$ into USD per tCO$_2$, the minus sign makes the SCC positive, and the code adds 0.00001 to the denominator to avoid dividing by zero.
+
+**Caveats.** The signs depend on how the solver (Ipopt through JuMP) reports duals for a maximization problem; the formula's leading minus sign assumes $\nu^{E}$ comes out negative. The multipliers also include the welfare weights $w_r$, the discount factor, and population, because those sit inside the objective.
+:::
+
+## Notes on the implementation
+
+- Several stocks (capital) use inequality constraints (`<=`) rather than equality; this is harmless in an optimum where investment is valuable.
+- The emissions unit conversion uses 3.667 in the reservoir equations but 3.666 in cumulative emissions.
+- Initial conditions for each reservoir, temperature box, and the stocks are set in period 1 from parameters.
+- The global damage fraction in post-processing is a sum of regional fractions over total gross output, which differs from the damage-weighted ratio $\sum_r \text{Damages}_{t,r} / \sum_r Y^{gross}_{t,r}$.

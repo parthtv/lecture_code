@@ -1,0 +1,288 @@
+<style>
+  .dsym-hover { background: rgba(255, 200, 0, 0.35); border-radius: 3px; cursor: help; }
+  #dice-tip {
+    position: absolute; z-index: 10000; max-width: 20rem; padding: 0.45rem 0.65rem;
+    background: #1b1f24; color: #fff; border-radius: 6px; font-size: 0.85rem;
+    line-height: 1.35; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); pointer-events: none;
+  }
+  #dice-tip[hidden] { display: none; }
+  #dice-tip .dice-tip-type { display: block; margin-top: 0.2rem; font-size: 0.75rem; color: #ffd33d; }
+  #dice-tip .dice-tip-more { display: block; margin-top: 0.3rem; font-size: 0.75rem; font-style: italic; color: #d0d7de; }
+  #dice-tip .dice-tip-unit { display: block; margin-top: 0.1rem; font-size: 0.75rem; color: #9ecbff; }
+</style>
+<script>
+/* Hover glossary for the DICE summary.
+   1. transform() runs on every TeX string before MathJax parses it and wraps each
+      recognised symbol in \class{dsym-N}{...}, where N indexes GLOSSARY below.
+   2. A delegated mouseover/click handler shows the entry for the innermost symbol.
+   The .qmd equations stay plain LaTeX; keep GLOSSARY in step with the Notation tables. */
+(function (root) {
+  var T = {
+    param: 'Parameter (exogenous input)',
+    vari: 'Variable (solved by the model)',
+    dec: 'Decision variable (chosen by the planner)',
+    out: 'Derived output (computed after solving)',
+    idx: 'Index',
+    cst: 'Constant'
+  };
+
+  /* [regex on canonical name, meaning, type, unit (optional)]. First match wins, so put specific entries first.
+     Canonical name = base + "^label" + "_subscript", braces and spaces removed, e.g. "Y^gross_t,r". */
+  var GLOSSARY = [
+    // indices and time
+    [/^t$/, 'Time period', 'idx'],
+    [/^r$/, 'Region', 'idx'],
+    [/^j$/, 'Carbon-cycle reservoir (0 to 3)', 'idx'],
+    [/^k$/, 'Temperature box (1 = fast, 2 = slow)', 'idx'],
+    [/^T$/, 'Number of time periods', 'idx'],
+    [/^\\Delta$/, 'Length of a time step (tstep)', 'param', 'years'],
+    [/^e$/, 'Euler’s number, the base of the natural logarithm', 'cst'],
+    // economy
+    [/^\\bar\\mu/, 'Upper bound on the emission control rate', 'param', 'fraction'],
+    [/^\\mu_t$/, 'Global emission control rate', 'out', 'fraction'],
+    [/^\\mu/, 'Emission control rate: fraction of baseline emissions abated', 'dec', 'fraction (0 to 1)'],
+    [/^s(_|$)/, 'Savings rate: fraction of output invested', 'dec', 'fraction (0 to 1)'],
+    [/^A(_|$)/, 'Total factor productivity', 'param', 'not stated'],
+    [/^L(_|$)/, 'Population (labor)', 'param', 'millions'],
+    [/^k_0/, 'Initial capital stock', 'param', 'trillion 2019 USD (implied)'],
+    [/^K(_|$)/, 'Capital stock', 'vari', 'trillion 2019 USD'],
+    [/^\\gamma/, 'Capital share of output', 'param', 'fraction'],
+    [/^\\delta/, 'Annual capital depreciation rate', 'param', 'per year'],
+    [/^Y\^gross/, 'Gross output, before damages and abatement cost', 'vari', 'trillion 2019 USD per year'],
+    [/^Y\^net/, 'Output net of damages', 'vari', 'trillion 2019 USD per year'],
+    [/^Y(_|$)/, 'Output net of damages and abatement cost', 'vari', 'trillion 2019 USD per year'],
+    [/^a_1/, 'Damage function coefficient (linear term)', 'param', 'per °C (implied)'],
+    [/^a_2/, 'Damage function coefficient (scale of the power term)', 'param', 'per (°C)^a₃ (implied)'],
+    [/^a_3/, 'Damage function exponent on temperature', 'param', 'dimensionless (implied)'],
+    [/^text:Damages/, 'Climate damages', 'vari', 'trillion 2019 USD per year'],
+    [/^D(_|$)/, 'Damage fraction of gross output', 'vari', 'fraction'],
+    [/^\\kappa/, 'Abatement cost coefficient: cost of full abatement as a fraction of gross output', 'param', 'fraction of gross output'],
+    [/^\\theta/, 'Exponent of the abatement cost curve', 'param', 'dimensionless'],
+    [/^\\Lambda/, 'Abatement cost', 'vari', 'trillion 2019 USD per year'],
+    [/^I(_|$)/, 'Investment', 'vari', 'trillion 2019 USD per year'],
+    [/^C(_|$)/, 'Total consumption', 'vari', 'trillion 2019 USD per year'],
+    [/^c(_|$)/, 'Per capita consumption', 'vari', 'thousand 2019 USD per year'],
+    [/^p\^back/, 'Backstop price: cost of fully abating emissions', 'param', '2019 USD per tCO₂ (inferred from the carbon price equation)'],
+    [/^P\^C/, 'Implied carbon price (marginal abatement cost)', 'vari', '2019 USD per tCO₂'],
+    [/^S(_|$)/, 'Global savings rate, I / Y', 'vari', 'fraction'],
+    // emissions
+    [/^\\sigma/, 'Emissions intensity: emissions per unit of gross output with no abatement', 'param', 'GtCO₂ per trillion 2019 USD (implied)'],
+    [/^E\^land/, 'Land-use CO₂ emissions', 'param', 'GtCO₂ per year (implied)'],
+    [/^E\^nonCO_2/, 'Baseline abatable non-CO₂ greenhouse gas emissions (CO₂-equivalent)', 'param', 'GtCO₂ per year (implied)'],
+    [/^E\^ind/, 'Industrial CO₂ emissions after abatement', 'vari', 'GtCO₂ per year'],
+    [/^E\^CO_2e/, 'Total greenhouse gas emissions (CO₂-equivalent) after abatement', 'vari', 'GtCO₂ per year'],
+    [/^E\^CO_2/, 'Total CO₂ emissions after abatement', 'vari', 'GtCO₂ per year'],
+    [/^text:CCATOT/, 'Cumulative CO₂ emissions', 'vari', 'GtC'],
+    // carbon cycle
+    [/^R_/, 'Excess atmospheric carbon held in reservoir j', 'vari', 'GtC'],
+    [/^\\phi/, 'Fraction of each emission that enters reservoir j', 'param', 'fraction'],
+    [/^\\tau/, 'Base decay timescale of reservoir j', 'param', 'years'],
+    [/^\\alpha/, 'Scaling factor applied to all reservoir timescales (slower uptake as sinks fill and the planet warms)', 'vari', 'dimensionless'],
+    [/^M\^AT/, 'Atmospheric carbon stock', 'vari', 'GtC'],
+    [/^M\^eq/, 'Preindustrial equilibrium atmospheric carbon', 'param', 'GtC (implied)'],
+    [/^M_0/, 'Atmospheric carbon in the initial year', 'param', 'GtC (implied)'],
+    [/^text:cum/, 'Cumulative emissions in the initial year', 'param', 'GtC (implied)'],
+    [/^text:CACC/, 'Carbon accumulated in sinks (ocean and land)', 'vari', 'GtC'],
+    [/^text:IRF100/, '100-year integrated impulse response: time-integrated airborne fraction of a carbon pulse', 'vari', 'years (implied)'],
+    [/^text:irf/, 'Intercept of the linear IRF100 relationship', 'param', 'years (implied)'],
+    [/^text:irc/, 'Sink-saturation slope of the IRF100 relationship', 'param', 'years per GtC (implied)'],
+    [/^text:irt/, 'Temperature slope of the IRF100 relationship', 'param', 'years per °C (implied)'],
+    // climate
+    [/^F_2\\times/, 'Forcing from a doubling of atmospheric CO₂', 'param', 'W/m² (implied)'],
+    [/^F\^misc/, 'Exogenous forcing from other sources (aerosols, other gases)', 'param', 'W/m² (implied)'],
+    [/^F\^GHG/, 'Forcing from abatable non-CO₂ gases', 'vari', 'W/m² (implied)'],
+    [/^F(_|$)/, 'Total radiative forcing', 'vari', 'W/m²'],
+    [/^f_1/, 'Forcing added per unit of non-CO₂ emissions', 'param', 'W/m² per (GtCO₂ per year) (implied)'],
+    [/^f_2/, 'Fraction of last period’s non-CO₂ forcing that persists', 'param', 'fraction'],
+    [/^T\^box/, 'Temperature anomaly of box k', 'vari', '°C'],
+    [/^T\^AT/, 'Atmospheric temperature change above preindustrial', 'vari', '°C above the 1765 level'],
+    [/^d_/, 'Response time of temperature box k', 'param', 'years'],
+    [/^\\lambda/, 'Equilibrium temperature response of box k per unit forcing', 'param', '°C per W/m² (implied)'],
+    // welfare
+    [/^\\eta/, 'Elasticity of marginal utility of consumption (elasmu)', 'param', 'dimensionless'],
+    [/^u(_|$)/, 'Per capita utility', 'vari', 'not stated'],
+    [/^\\rho/, 'Social discount factor (rr)', 'param', 'dimensionless'],
+    [/^w(_|$)/, 'Regional welfare weight: how much the planner values region r\u2019s welfare (set by the user, not solved for)', 'param', 'dimensionless'],
+    [/^U(_|$)/, 'Period welfare, summed over regions', 'vari', 'not stated'],
+    [/^text:scale_1/, 'Scale constant for the objective', 'param', 'not stated'],
+    [/^text:scale_2/, 'Offset constant for the objective', 'param', 'not stated'],
+    [/^W$/, 'Total welfare (the objective)', 'vari', 'not stated'],
+    // post-processing
+    [/^text:SCC/, 'Social cost of carbon', 'out', 'dollars per tCO₂ (implied by the formula)', 'scc-explainer'],
+    [/^\\nu\^E/, 'Shadow price (Lagrange multiplier) on the emissions constraint: welfare change per extra GtCO\u2082', 'out', null, 'scc-explainer'],
+    [/^\\nu\^C/, 'Shadow price (Lagrange multiplier) on the consumption constraint: welfare change per extra unit of consumption', 'out', null, 'scc-explainer']
+  ];
+
+  var LABEL = /^[A-Za-z]+(_\{?[A-Za-z0-9]+\}?)?$/;
+  var TEXTCMDS = { text: 1, mathit: 1, mathrm: 1, operatorname: 1 };
+
+  function lookup(canon) {
+    for (var i = 0; i < GLOSSARY.length; i++) if (GLOSSARY[i][0].test(canon)) return i;
+    return -1;
+  }
+  function clean(x) { return x.replace(/\\,|[{}\s]/g, ''); }
+  function unbrace(x) { return x.charAt(0) === '{' ? x.slice(1, -1) : x; }
+  function skipGroup(s, i) {
+    for (var d = 0, j = i; j < s.length; j++) {
+      var c = s.charAt(j);
+      if (c === '\\') { j++; continue; }
+      if (c === '{') d++;
+      else if (c === '}' && --d === 0) return j + 1;
+    }
+    return s.length;
+  }
+  function readToken(s, i) {
+    var c = s.charAt(i);
+    if (c === '{') return skipGroup(s, i);
+    if (c === '\\') return i + /^\\([A-Za-z]+|[^A-Za-z])/.exec(s.slice(i))[0].length;
+    return i + 1;
+  }
+  // operand of ^ or _, always returned braced so the result is valid wherever it lands
+  function script(kind, inner, raw) { return kind + '{' + (raw ? inner : tx(inner)) + '}'; }
+
+  function tx(s) {
+    var out = '', i = 0, n = s.length;
+    while (i < n) {
+      var c = s.charAt(i), j, base, canonBase;
+      if (c === '{') { j = skipGroup(s, i); out += '{' + tx(s.slice(i + 1, j - 1)) + '}'; i = j; continue; }
+      if (c === '^' || c === '_') {
+        out += c; i++;
+        if (i < n) { j = readToken(s, i); out += '{' + tx(s.slice(i, j)) + '}'; i = j; }
+        continue;
+      }
+      if (c === '\\') {
+        var m = /^\\([A-Za-z]+|[^A-Za-z])/.exec(s.slice(i)), name = m[1];
+        j = i + m[0].length;
+        if (!/^[A-Za-z]/.test(name)) { out += m[0]; i = j; continue; }      // \, \; \{ ...
+        if (TEXTCMDS[name] && s.charAt(j) === '{') {
+          var e = skipGroup(s, j);
+          canonBase = 'text:' + s.slice(j + 1, e - 1); j = e;
+        } else if (name === 'bar') {
+          var e2 = readToken(s, j); canonBase = '\\bar' + s.slice(j, e2); j = e2;
+        } else canonBase = '\\' + name;
+      } else if (/[A-Za-z]/.test(c)) { j = i + 1; canonBase = c; }
+      else { out += c; i++; continue; }
+      base = s.slice(i, j);
+
+      var scripts = [];
+      while (j < n && (s.charAt(j) === '^' || s.charAt(j) === '_')) {
+        var kind = s.charAt(j), k = readToken(s, j + 1);
+        if (scripts.some(function (x) { return x.kind === kind; })) break;
+        scripts.push({ kind: kind, inner: unbrace(s.slice(j + 1, k)) });
+        j = k;
+      }
+      var sup = scripts.filter(function (x) { return x.kind === '^'; })[0];
+      var sub = scripts.filter(function (x) { return x.kind === '_'; })[0];
+      var subPart = sub ? '_' + clean(sub.inner) : '';
+      var idx = -1, labelled = false;
+      if (sup && LABEL.test(sup.inner)) {
+        idx = lookup(canonBase + '^' + clean(sup.inner) + subPart);
+        labelled = idx >= 0;
+      }
+      if (idx < 0) idx = lookup(canonBase + subPart);
+
+      var body = base + scripts.map(function (x) {
+        return script(x.kind, x.inner, labelled && x === sup);
+      }).join('');
+      out += idx >= 0 ? '\\class{dsym-' + idx + '}{' + body + '}' : body;
+      i = j;
+    }
+    return out;
+  }
+
+  root.DiceTips = { transform: tx, glossary: GLOSSARY, types: T };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+window.MathJax = {
+  loader: { load: ['[tex]/html'] },
+  tex: { packages: { '[+]': ['html'] } },
+  startup: {
+    ready: function () {
+      MathJax.startup.defaultReady();
+      MathJax.startup.input[0].preFilters.add(function (o) {
+        o.math.math = window.DiceTips.transform(o.math.math);
+      });
+    }
+  }
+};
+
+document.addEventListener('DOMContentLoaded', function () {
+  var tip = document.createElement('div');
+  tip.id = 'dice-tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true;
+  document.body.appendChild(tip);
+  var current = null;
+
+  function symbolAt(node) {
+    for (; node && node.nodeType === 1; node = node.parentNode) {
+      var m = /(?:^|\s)dsym-(\d+)(?:\s|$)/.exec(node.getAttribute('class') || '');
+      if (m) return { el: node, entry: window.DiceTips.glossary[+m[1]] };
+    }
+    return null;
+  }
+  function hide() {
+    tip.hidden = true;
+    if (current) current.classList.remove('dsym-hover');
+    current = null;
+  }
+  function show(hit) {
+    if (current === hit.el) return;
+    hide();
+    current = hit.el; current.classList.add('dsym-hover');
+    tip.textContent = '';
+    tip.appendChild(document.createTextNode(hit.entry[1]));
+    var type = document.createElement('span');
+    type.className = 'dice-tip-type';
+    type.textContent = window.DiceTips.types[hit.entry[2]];
+    tip.appendChild(type);
+    if (hit.entry[4]) {
+      var more = document.createElement('span');
+      more.className = 'dice-tip-more';
+      more.textContent = 'Click for a fuller explanation';
+      tip.appendChild(more);
+    }
+    if (hit.entry[3]) {
+      var unit = document.createElement('span');
+      unit.className = 'dice-tip-unit';
+      unit.textContent = 'Unit: ' + hit.entry[3];
+      tip.appendChild(unit);
+    }
+    tip.hidden = false;
+    var r = hit.el.getBoundingClientRect();
+    var left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - tip.offsetWidth - 8);
+    tip.style.left = Math.max(window.scrollX + 8, left) + 'px';
+    tip.style.top = (r.bottom + window.scrollY + 6) + 'px';
+  }
+  document.addEventListener('mouseover', function (e) {
+    var hit = symbolAt(e.target);
+    if (hit) show(hit); else hide();
+  });
+  // Expand a collapsed Quarto callout and bring it into view.
+  function openCallout(id, smooth) {
+    var box = document.getElementById(id);
+    if (!box) return;
+    var header = box.querySelector('.callout-header');
+    if (header && header.getAttribute('aria-expanded') === 'false') header.click();
+    box.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+  }
+  function openFromHash() {
+    var id = decodeURIComponent(location.hash.slice(1));
+    if (id && document.querySelector('#' + id + '.callout')) openCallout(id, false);
+  }
+  window.addEventListener('hashchange', openFromHash);
+  openFromHash();
+
+  document.addEventListener('click', function (e) {   // touch devices have no hover
+    var hit = symbolAt(e.target), linked = null;
+    // a click anywhere on a linked symbol counts, including its subscripts and superscripts
+    for (var n = e.target; n && n.nodeType === 1 && !linked; n = n.parentNode) {
+      var h = symbolAt(n);
+      if (h && h.entry[4]) linked = h;
+      if (h) n = h.el;
+    }
+    if (linked) { hide(); openCallout(linked.entry[4], true); }
+    else if (hit) show(hit);
+    else hide();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
+});
+</script>
