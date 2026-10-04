@@ -377,7 +377,8 @@ window.Quarto = {
   <li><a href="#climate" id="toc-climate" class="nav-link" data-scroll-target="#climate"><span class="header-section-number">6</span> Climate</a></li>
   <li><a href="#welfare-and-objective" id="toc-welfare-and-objective" class="nav-link" data-scroll-target="#welfare-and-objective"><span class="header-section-number">7</span> Welfare and objective</a></li>
   <li><a href="#solution-and-post-processing" id="toc-solution-and-post-processing" class="nav-link" data-scroll-target="#solution-and-post-processing"><span class="header-section-number">8</span> Solution and post-processing</a></li>
-  <li><a href="#notes-on-the-implementation" id="toc-notes-on-the-implementation" class="nav-link" data-scroll-target="#notes-on-the-implementation"><span class="header-section-number">9</span> Notes on the implementation</a></li>
+  <li><a href="#sec-scenarios" id="toc-sec-scenarios" class="nav-link" data-scroll-target="#sec-scenarios"><span class="header-section-number">9</span> Scenario parameters: <code>cbopt</code> and <code>t2c</code></a></li>
+  <li><a href="#notes-on-the-implementation" id="toc-notes-on-the-implementation" class="nav-link" data-scroll-target="#notes-on-the-implementation"><span class="header-section-number">10</span> Notes on the implementation</a></li>
   </ul>
 </nav>
 </div>
@@ -402,7 +403,7 @@ window.Quarto = {
 </header>
 
 
-<p>Source: <code>src/CoreModel.jl</code> in <a href="https://github.com/sylvaticus/DICEModel.jl">DICEModel.jl</a> (MIT license). This is a regionalized implementation of DICE-2023 in Julia/JuMP, solved with Ipopt. Numeric parameter values live in the <code>DICEParameters</code> struct and are not reproduced here.</p>
+<p>Source: <code>src/CoreModel.jl</code> in <a href="https://github.com/sylvaticus/DICEModel.jl">DICEModel.jl</a> (MIT license). This is a regionalized implementation of DICE-2023 in Julia/JuMP, solved with Ipopt. Numeric parameter values live in the <code>DICEParameters</code> struct (<code>src/Parameters.jl</code>); the values used by the two main scenarios are tabulated in <a href="#sec-scenarios" class="quarto-xref">Section&nbsp;9</a>.</p>
 <p><em>Hover over (or tap) any symbol in an equation to see what it means and whether it is a variable or a parameter.</em></p>
 <section id="overview" class="level2" data-number="1">
 <h2 data-number="1" class="anchored" data-anchor-id="overview"><span class="header-section-number">1</span> Overview</h2>
@@ -1138,8 +1139,222 @@ U_t = \sum_r u_{t,r}\; L_{t,r}\;\rho_{t,r}\;\frac{w_r}{\sum_{r'} w_{r'}}
 </div>
 </div>
 </section>
-<section id="notes-on-the-implementation" class="level2" data-number="9">
-<h2 data-number="9" class="anchored" data-anchor-id="notes-on-the-implementation"><span class="header-section-number">9</span> Notes on the implementation</h2>
+<section id="sec-scenarios" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="sec-scenarios"><span class="header-section-number">9</span> Scenario parameters: <code>cbopt</code> and <code>t2c</code></h2>
+<p>Source: <code>src/Scenarios.jl</code> and <code>src/Parameters.jl</code>. The two scenarios share <strong>every</strong> parameter below. They differ in exactly one respect: <code>t2c</code> adds a constraint on the temperature path.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Scenario</th>
+<th>Call</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>cbopt</code></td>
+<td><code>run_dice()</code></td>
+<td>Cost-benefit optimum. The planner trades abatement costs against climate damages with no temperature limit.</td>
+</tr>
+<tr class="even">
+<td><code>t2c</code></td>
+<td><code>run_dice(bounds = Dict("TATM"=&gt;("&lt;=",2.0)))</code></td>
+<td>Same model, but <span class="math inline">\(T^{AT}_t \le 2\)</span> °C in every period (cost-effectiveness under a temperature cap).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Parameter values shared by both scenarios</strong> (DICE-2023 defaults, single “World” region, 81 periods of 5 years, 2020 to 2420)</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Group</th>
+<th>Parameter (code name)</th>
+<th>Value</th>
+<th>What the choice means</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Damages</td>
+<td>Quadratic term (<code>a2base</code>)</td>
+<td>0.003467</td>
+<td>Damages are 0.35% of gross output at 1 °C, 1.4% at 2 °C, 3.1% at 3 °C, 5.5% at 4 °C. These are moderate by the standards of the literature, which is why the unconstrained optimum tolerates substantial warming.</td>
+</tr>
+<tr class="even">
+<td></td>
+<td>Intercept (<code>a1</code>), exponent (<code>a3</code>)</td>
+<td>0, 2</td>
+<td>Damages are purely quadratic in temperature: no damage at 0 °C, and doubling the warming quadruples the loss.</td>
+</tr>
+<tr class="odd">
+<td>Abatement cost</td>
+<td>Exponent (<code>expcost2</code>)</td>
+<td>2.6</td>
+<td>Costs rise steeply with the control rate (<span class="math inline">\(\propto \mu^{2.6}\)</span>), so the first cuts are cheap and the last ones are expensive.</td>
+</tr>
+<tr class="even">
+<td></td>
+<td>Backstop price in 2050 (<code>pback2050</code>)</td>
+<td>515 USD/tCO<span class="math inline">\(_2\)</span></td>
+<td>The cost of eliminating emissions entirely. It falls about 1% per year before 2050 and 0.1% per year after.</td>
+</tr>
+<tr class="odd">
+<td>Control limits</td>
+<td>Emission control rate in 2020 (<code>miu1</code>)</td>
+<td>0.05</td>
+<td>Starting point consistent with current policy.</td>
+</tr>
+<tr class="even">
+<td></td>
+<td>Maximum ramp-up (<code>delmiumax</code>)</td>
+<td>0.12 per period</td>
+<td>The control rate cannot rise faster than 12 percentage points per 5 years, so rapid decarbonization is capped by feasibility, not only by cost.</td>
+</tr>
+<tr class="odd">
+<td></td>
+<td>Upper limit on <span class="math inline">\(\mu\)</span> (<code>limmiu2070</code>, <code>limmiu2120</code>, <code>limmiu2200</code>, <code>limmiu2300</code>)</td>
+<td>1.0, 1.1, 1.05, 1.0</td>
+<td>Full abatement is allowed from about 2060. Values above 1 after 2120 allow net-negative emissions (carbon removal).</td>
+</tr>
+<tr class="even">
+<td>Preferences</td>
+<td>Pure rate of time preference (<code>prstp</code>)</td>
+<td>0.001</td>
+<td>Almost no discounting of future generations for their own sake.</td>
+</tr>
+<tr class="odd">
+<td></td>
+<td>Elasticity of marginal utility (<code>elasmu</code>)</td>
+<td>0.95</td>
+<td>Weak aversion to inequality over time, which with the item above gives a growth-based discount component.</td>
+</tr>
+<tr class="even">
+<td></td>
+<td>Climate beta, capital risk premium (<code>betaclim</code>, <code>pi_val</code>)</td>
+<td>0.5, 0.05</td>
+<td>Together they give a risk-adjusted rate of time preference <span class="math inline">\(\exp(0.001 + 0.5 \times 0.05) - 1 \approx 2.6\%\)</span> per year. Low by market standards, which makes future damages weigh heavily.</td>
+</tr>
+<tr class="odd">
+<td>Economy</td>
+<td>Capital elasticity (<code>gamma</code>), depreciation (<code>dk</code>)</td>
+<td>0.3, 0.1 per year</td>
+<td>Standard Cobb-Douglas share and depreciation rate.</td>
+</tr>
+<tr class="even">
+<td></td>
+<td>Initial output (<code>q1</code>), capital (<code>k0</code>)</td>
+<td>135.7, 295 trillion USD</td>
+<td>2020 gross world product and capital stock, in 2019 USD.</td>
+</tr>
+<tr class="odd">
+<td>Population</td>
+<td>Initial (<code>pop1</code>), asymptote (<code>popasym</code>)</td>
+<td>7,753 and 10,825 million</td>
+<td>Population grows to about 10.8 billion.</td>
+</tr>
+<tr class="even">
+<td>Emissions</td>
+<td>Initial industrial emissions (<code>e1</code>)</td>
+<td>37.56 GtCO<span class="math inline">\(_2\)</span> per year</td>
+<td>2020 baseline.</td>
+</tr>
+<tr class="odd">
+<td></td>
+<td>Growth of emissions intensity (<code>gsigma1</code>, <code>delgsig</code>, <code>asymgsig</code>)</td>
+<td>-1.5% per year, decaying 4% per period, floor -0.5% per year</td>
+<td>Emissions per unit of output keep falling even without policy, but more slowly over time.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Results from running the model</strong></p>
+<div id="cell-fig-temp" class="cell" data-execution_count="3">
+<div class="cell-output cell-output-display">
+<div id="fig-temp" class="quarto-float quarto-figure quarto-figure-center anchored" alt="Line chart with year (2020 to 2100) on the horizontal axis and atmospheric warming above 1765 in degrees Celsius on the vertical axis. A dotted horizontal line marks 2 degrees. Both scenarios start at about 1.25 degrees in 2020 and are close until 2050 (1.92 for cbopt, 1.85 for t2c). The cbopt line, the cost-benefit optimum, crosses 2 degrees in the mid 2050s and keeps rising to about 2.3 degrees in 2075 and 2.6 degrees in 2100. The t2c line, the 2 degree cap scenario, flattens as it reaches 2 degrees by about 2070 and stays on the dotted line through 2100.">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-temp-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="dice_summary_files/figure-html/fig-temp-output-1.png" alt="Line chart with year (2020 to 2100) on the horizontal axis and atmospheric warming above 1765 in degrees Celsius on the vertical axis. A dotted horizontal line marks 2 degrees. Both scenarios start at about 1.25 degrees in 2020 and are close until 2050 (1.92 for cbopt, 1.85 for t2c). The cbopt line, the cost-benefit optimum, crosses 2 degrees in the mid 2050s and keeps rising to about 2.3 degrees in 2075 and 2.6 degrees in 2100. The t2c line, the 2 degree cap scenario, flattens as it reaches 2 degrees by about 2070 and stays on the dotted line through 2100." width="589" height="356" class="figure-img">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-temp-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;2: Atmospheric temperature increase above 1765, 2020 to 2100, in the cbopt and t2c scenarios, from DICEModel.jl.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<div id="cell-fig-scc" class="cell" data-execution_count="4">
+<div class="cell-output cell-output-display">
+<div id="fig-scc" class="quarto-float quarto-figure quarto-figure-center anchored" alt="Line chart with year (2025 to 2100) on the horizontal axis and the social cost of carbon in US dollars per tonne of CO2 on the vertical axis. Both lines rise. The t2c line, the 2 degree cap scenario, starts near 89 dollars in 2025, climbs faster than the cbopt line to about 480 dollars in 2075, then flattens to about 510 dollars in 2100. The cbopt line, the cost-benefit optimum, rises more smoothly from about 59 dollars in 2025 to about 230 dollars in 2075 and 390 dollars in 2100. The t2c line stays above the cbopt line throughout.">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-scc-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="dice_summary_files/figure-html/fig-scc-output-1.png" alt="Line chart with year (2025 to 2100) on the horizontal axis and the social cost of carbon in US dollars per tonne of CO2 on the vertical axis. Both lines rise. The t2c line, the 2 degree cap scenario, starts near 89 dollars in 2025, climbs faster than the cbopt line to about 480 dollars in 2075, then flattens to about 510 dollars in 2100. The cbopt line, the cost-benefit optimum, rises more smoothly from about 59 dollars in 2025 to about 230 dollars in 2075 and 390 dollars in 2100. The t2c line stays above the cbopt line throughout." width="595" height="356" class="figure-img">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-scc-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;3: Social cost of carbon by year, 2025 to 2100, in the cbopt and t2c scenarios, from DICEModel.jl (2019 USD per tCO2).
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p><strong>What differs: the temperature cap</strong></p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th><code>cbopt</code></th>
+<th><code>t2c</code></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Constraint on <span class="math inline">\(T^{AT}_t\)</span></td>
+<td>None (hard model bounds only, 0.5 to 20 °C)</td>
+<td><span class="math inline">\(\le 2.0\)</span> °C in all periods</td>
+</tr>
+<tr class="even">
+<td>Role of damages</td>
+<td>Set the level of abatement through the SCC</td>
+<td>Still counted in welfare, but the cap binds first</td>
+</tr>
+<tr class="odd">
+<td>Emission control rate</td>
+<td>Chosen where marginal abatement cost equals the SCC</td>
+<td>Raised faster until the cap holds, within the ramp limit (0.55 in 2050 against 0.39 in <code>cbopt</code>)</td>
+</tr>
+<tr class="even">
+<td>Carbon price (<code>CPRICE</code>)</td>
+<td>About 115 USD/tCO<span class="math inline">\(_2\)</span> in 2050</td>
+<td>About 200 USD/tCO<span class="math inline">\(_2\)</span> in 2050</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Interpretation.</strong></p>
+<ul>
+<li>Because the parameters are identical, every difference in outcomes between the two scenarios is caused by the temperature cap alone. This makes the pair a clean comparison of “optimal” versus “2 °C-compatible” policy.</li>
+<li>Temperature confirms the cap matters. <code>cbopt</code> warms to a peak of 2.6 °C (around 2110) and stays above 2 °C from about 2055 to 2175; <code>t2c</code> sits exactly at the 2.0 °C cap from 2075 to 2130 (the cap binds in 12 periods) and cools afterwards (<a href="#fig-temp" class="quarto-xref">Figure&nbsp;2</a> shows the paths up to 2100).</li>
+<li>Abatement is more front-loaded under the cap. Spending peaks at 3.2% of output in 2075 in <code>t2c</code>, against 3.0% in 2125 in <code>cbopt</code>. The ramp limit (<code>delmiumax</code>) is what makes early action necessary: a cap that is approached late cannot be met by cutting faster than 12 points per period.</li>
+<li>In both scenarios the carbon price is within about 10% of the SCC in mid-century but far below it in 2025 (17 against 59 to 89 USD/tCO<span class="math inline">\(_2\)</span>), because the ramp limit, not cost, holds the 2025 control rate at 0.10. Where the control rate hits its ceiling later, the two diverge again (543 against 914 USD/tCO<span class="math inline">\(_2\)</span> in 2150 in <code>cbopt</code>).</li>
+<li>The parameter choices are not neutral, and these results hold only for the defaults tabulated above. Scenarios such as <code>altdam</code> (<code>a2base = 0.01</code>) change the damage function; I have not run them.</li>
+</ul>
+<p><em>Parameter values are read from the package source. All figures and numbers under “Results from running the model” and “Interpretation” come from a run of DICEModel.jl (Julia 1.13) on 2026-10-03 and are stored in <code>dice_scenario_results.csv</code>; both scenarios reached <code>LOCALLY_SOLVED</code> with Ipopt. The first-period (2020) SCC is omitted from the plot because the 2020 control rate is fixed by the initial condition.</em></p>
+</section>
+<section id="notes-on-the-implementation" class="level2" data-number="10">
+<h2 data-number="10" class="anchored" data-anchor-id="notes-on-the-implementation"><span class="header-section-number">10</span> Notes on the implementation</h2>
 <ul>
 <li>Several stocks (capital) use inequality constraints (<code>&lt;=</code>) rather than equality; this is harmless in an optimum where investment is valuable.</li>
 <li>The emissions unit conversion uses 3.667 in the reservoir equations but 3.666 in cumulative emissions.</li>

@@ -7,7 +7,7 @@ format:
     include-in-header: dice_tooltips.html
 ---
 
-Source: `src/CoreModel.jl` in [DICEModel.jl](https://github.com/sylvaticus/DICEModel.jl) (MIT license). This is a regionalized implementation of DICE-2023 in Julia/JuMP, solved with Ipopt. Numeric parameter values live in the `DICEParameters` struct and are not reproduced here.
+Source: `src/CoreModel.jl` in [DICEModel.jl](https://github.com/sylvaticus/DICEModel.jl) (MIT license). This is a regionalized implementation of DICE-2023 in Julia/JuMP, solved with Ipopt. Numeric parameter values live in the `DICEParameters` struct (`src/Parameters.jl`); the values used by the two main scenarios are tabulated in @sec-scenarios.
 
 *Hover over (or tap) any symbol in an equation to see what it means and whether it is a variable or a parameter.*
 
@@ -397,6 +397,112 @@ $$
 
 **Caveats.** The signs depend on how the solver (Ipopt through JuMP) reports duals for a maximization problem; the formula's leading minus sign assumes $\nu^{E}$ comes out negative. The multipliers also include the welfare weights $w_r$, the discount factor, and population, because those sit inside the objective.
 :::
+
+## Scenario parameters: `cbopt` and `t2c` {#sec-scenarios}
+
+Source: `src/Scenarios.jl` and `src/Parameters.jl`. The two scenarios share **every** parameter below. They differ in exactly one respect: `t2c` adds a constraint on the temperature path.
+
+| Scenario | Call | What it does |
+|---|---|---|
+| `cbopt` | `run_dice()` | Cost-benefit optimum. The planner trades abatement costs against climate damages with no temperature limit. |
+| `t2c` | `run_dice(bounds = Dict("TATM"=>("<=",2.0)))` | Same model, but $T^{AT}_t \le 2$ °C in every period (cost-effectiveness under a temperature cap). |
+
+**Parameter values shared by both scenarios** (DICE-2023 defaults, single "World" region, 81 periods of 5 years, 2020 to 2420)
+
+| Group | Parameter (code name) | Value | What the choice means |
+|---|---|---|---|
+| Damages | Quadratic term (`a2base`) | 0.003467 | Damages are 0.35% of gross output at 1 °C, 1.4% at 2 °C, 3.1% at 3 °C, 5.5% at 4 °C. These are moderate by the standards of the literature, which is why the unconstrained optimum tolerates substantial warming. |
+| | Intercept (`a1`), exponent (`a3`) | 0, 2 | Damages are purely quadratic in temperature: no damage at 0 °C, and doubling the warming quadruples the loss. |
+| Abatement cost | Exponent (`expcost2`) | 2.6 | Costs rise steeply with the control rate ($\propto \mu^{2.6}$), so the first cuts are cheap and the last ones are expensive. |
+| | Backstop price in 2050 (`pback2050`) | 515 USD/tCO$_2$ | The cost of eliminating emissions entirely. It falls about 1% per year before 2050 and 0.1% per year after. |
+| Control limits | Emission control rate in 2020 (`miu1`) | 0.05 | Starting point consistent with current policy. |
+| | Maximum ramp-up (`delmiumax`) | 0.12 per period | The control rate cannot rise faster than 12 percentage points per 5 years, so rapid decarbonization is capped by feasibility, not only by cost. |
+| | Upper limit on $\mu$ (`limmiu2070`, `limmiu2120`, `limmiu2200`, `limmiu2300`) | 1.0, 1.1, 1.05, 1.0 | Full abatement is allowed from about 2060. Values above 1 after 2120 allow net-negative emissions (carbon removal). |
+| Preferences | Pure rate of time preference (`prstp`) | 0.001 | Almost no discounting of future generations for their own sake. |
+| | Elasticity of marginal utility (`elasmu`) | 0.95 | Weak aversion to inequality over time, which with the item above gives a growth-based discount component. |
+| | Climate beta, capital risk premium (`betaclim`, `pi_val`) | 0.5, 0.05 | Together they give a risk-adjusted rate of time preference $\exp(0.001 + 0.5 \times 0.05) - 1 \approx 2.6\%$ per year. Low by market standards, which makes future damages weigh heavily. |
+| Economy | Capital elasticity (`gamma`), depreciation (`dk`) | 0.3, 0.1 per year | Standard Cobb-Douglas share and depreciation rate. |
+| | Initial output (`q1`), capital (`k0`) | 135.7, 295 trillion USD | 2020 gross world product and capital stock, in 2019 USD. |
+| Population | Initial (`pop1`), asymptote (`popasym`) | 7,753 and 10,825 million | Population grows to about 10.8 billion. |
+| Emissions | Initial industrial emissions (`e1`) | 37.56 GtCO$_2$ per year | 2020 baseline. |
+| | Growth of emissions intensity (`gsigma1`, `delgsig`, `asymgsig`) | -1.5% per year, decaying 4% per period, floor -0.5% per year | Emissions per unit of output keep falling even without policy, but more slowly over time. |
+
+**Results from running the model**
+
+```{python}
+#| label: run-julia
+#| echo: false
+#| output: false
+# Runs DICEModel.jl through Julia (installed via juliaup) the first time only.
+# Delete dice_scenario_results.csv to force a re-run (about 1 minute including
+# package loading; the two solves themselves take about a second each).
+import os, shutil, subprocess
+import pandas as pd
+
+csv = "dice_scenario_results.csv"
+if not os.path.exists(csv):
+    julia = shutil.which("julia") or os.path.expanduser("~/.juliaup/bin/julia")
+    subprocess.run([julia, "--project=dice_julia", "dice_julia/run_scenarios.jl", csv],
+                   check=True)
+res = pd.read_csv(csv)
+```
+
+```{python}
+#| label: fig-temp
+#| echo: false
+#| fig-cap: "Atmospheric temperature increase above 1765, 2020 to 2100, in the cbopt and t2c scenarios, from DICEModel.jl."
+#| fig-alt: "Line chart with year (2020 to 2100) on the horizontal axis and atmospheric warming above 1765 in degrees Celsius on the vertical axis. A dotted horizontal line marks 2 degrees. Both scenarios start at about 1.25 degrees in 2020 and are close until 2050 (1.92 for cbopt, 1.85 for t2c). The cbopt line, the cost-benefit optimum, crosses 2 degrees in the mid 2050s and keeps rising to about 2.3 degrees in 2075 and 2.6 degrees in 2100. The t2c line, the 2 degree cap scenario, flattens as it reaches 2 degrees by about 2070 and stays on the dotted line through 2100."
+import matplotlib.pyplot as plt
+
+style = {"cbopt": ("#0072B2", "-", "cbopt (cost-benefit optimum)"),
+         "t2c": ("#D55E00", "--", r"t2c (temperature $\leq$ 2 °C)")}
+
+fig, ax = plt.subplots(figsize=(7, 4))
+for sc, (c, ls, lab) in style.items():
+    d = res[(res.scenario == sc) & (res.year <= 2100)]
+    ax.plot(d.year, d.tatm, color=c, ls=ls, lw=2.2, label=lab)
+ax.axhline(2.0, color="grey", ls=":", lw=1.2)
+ax.set_xlabel("Year")
+ax.set_ylabel("Warming above 1765 (°C)")
+ax.legend(frameon=False, loc="upper left")
+ax.spines[["top", "right"]].set_visible(False)
+plt.show()
+```
+
+```{python}
+#| label: fig-scc
+#| echo: false
+#| fig-cap: "Social cost of carbon by year, 2025 to 2100, in the cbopt and t2c scenarios, from DICEModel.jl (2019 USD per tCO2)."
+#| fig-alt: "Line chart with year (2025 to 2100) on the horizontal axis and the social cost of carbon in US dollars per tonne of CO2 on the vertical axis. Both lines rise. The t2c line, the 2 degree cap scenario, starts near 89 dollars in 2025, climbs faster than the cbopt line to about 480 dollars in 2075, then flattens to about 510 dollars in 2100. The cbopt line, the cost-benefit optimum, rises more smoothly from about 59 dollars in 2025 to about 230 dollars in 2075 and 390 dollars in 2100. The t2c line stays above the cbopt line throughout."
+fig, ax = plt.subplots(figsize=(7, 4))
+for sc, (c, ls, lab) in style.items():
+    d = res[(res.scenario == sc) & (res.year >= 2025) & (res.year <= 2100)]
+    ax.plot(d.year, d.scc, color=c, ls=ls, lw=2.2, label=lab)
+ax.set_xlabel("Year")
+ax.set_ylabel(r"Social cost of carbon (2019 USD per tCO$_2$)")
+ax.legend(frameon=False)
+ax.spines[["top", "right"]].set_visible(False)
+plt.show()
+```
+
+**What differs: the temperature cap**
+
+| | `cbopt` | `t2c` |
+|---|---|---|
+| Constraint on $T^{AT}_t$ | None (hard model bounds only, 0.5 to 20 °C) | $\le 2.0$ °C in all periods |
+| Role of damages | Set the level of abatement through the SCC | Still counted in welfare, but the cap binds first |
+| Emission control rate | Chosen where marginal abatement cost equals the SCC | Raised faster until the cap holds, within the ramp limit (0.55 in 2050 against 0.39 in `cbopt`) |
+| Carbon price (`CPRICE`) | About 115 USD/tCO$_2$ in 2050 | About 200 USD/tCO$_2$ in 2050 |
+
+**Interpretation.**
+
+- Because the parameters are identical, every difference in outcomes between the two scenarios is caused by the temperature cap alone. This makes the pair a clean comparison of "optimal" versus "2 °C-compatible" policy.
+- Temperature confirms the cap matters. `cbopt` warms to a peak of 2.6 °C (around 2110) and stays above 2 °C from about 2055 to 2175; `t2c` sits exactly at the 2.0 °C cap from 2075 to 2130 (the cap binds in 12 periods) and cools afterwards (@fig-temp shows the paths up to 2100).
+- Abatement is more front-loaded under the cap. Spending peaks at 3.2% of output in 2075 in `t2c`, against 3.0% in 2125 in `cbopt`. The ramp limit (`delmiumax`) is what makes early action necessary: a cap that is approached late cannot be met by cutting faster than 12 points per period.
+- In both scenarios the carbon price is within about 10% of the SCC in mid-century but far below it in 2025 (17 against 59 to 89 USD/tCO$_2$), because the ramp limit, not cost, holds the 2025 control rate at 0.10. Where the control rate hits its ceiling later, the two diverge again (543 against 914 USD/tCO$_2$ in 2150 in `cbopt`).
+- The parameter choices are not neutral, and these results hold only for the defaults tabulated above. Scenarios such as `altdam` (`a2base = 0.01`) change the damage function; I have not run them.
+
+*Parameter values are read from the package source. All figures and numbers under "Results from running the model" and "Interpretation" come from a run of DICEModel.jl (Julia 1.13) on 2026-10-03 and are stored in `dice_scenario_results.csv`; both scenarios reached `LOCALLY_SOLVED` with Ipopt. The first-period (2020) SCC is omitted from the plot because the 2020 control rate is fixed by the initial condition.*
 
 ## Notes on the implementation
 
