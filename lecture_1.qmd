@@ -2,6 +2,8 @@
 title: "Lecture Code"
 format: live-html
 engine: knitr
+resources:
+  - tas_city_timeseries.csv
 ---
 **Lecture 1**
 
@@ -62,23 +64,162 @@ detroit_temp <- detroit_temp %>%
 ```
 
 **Lecture 9**
+
+The code below extracts the temperature time series for 10 cities at different latitudes, as described below, and saves it in a file called `tas_city_timeseries.csv`.
+
+| City            | Latitude | 2015 mean (°C) |
+|:----------------|---------:|---------------:|
+| McMurdo Station |  77.85°S |          -22.7 |
+| Punta Arenas    |  53.16°S |            5.1 |
+| Sydney          |  33.87°S |           16.6 |
+| Singapore       |   1.35°N |           27.1 |
+| Mumbai          |  19.08°N |           26.0 |
+| Cairo           |  30.04°N |           22.5 |
+| Detroit         |  42.33°N |            9.4 |
+| Moscow          |  55.75°N |            4.4 |
+| Reykjavik       |  64.15°N |            2.1 |
+| Longyearbyen    |  78.22°N |          -11.8 |
+
 ```{r}
+# Extract monthly near-surface air temperature for 10 cities from the FGOALS-f3-L
+# SSP5-8.5 netCDF file and save as a small CSV that webR can read.
+# Run with desktop R (needs ncdf4):  Rscript preprocess_tas.R
 library(ncdf4)
 
 nc_path <- "tas_Amon_FGOALS-f3-L_ssp585_r1i1p1f1_gr_201501-210012.nc"
+out_path <- "tas_city_timeseries.csv"
+
+# Cities ordered south to north, spanning the Antarctic to the Arctic
+cities <- data.frame(
+  city = c("McMurdo Station", "Punta Arenas", "Sydney", "Singapore", "Mumbai",
+           "Cairo", "Detroit", "Moscow", "Reykjavik", "Longyearbyen"),
+  lat  = c(-77.85, -53.16, -33.87,   1.35, 19.08, 30.04, 42.33, 55.75, 64.15, 78.22),
+  lon  = c(166.67, -70.91, 151.21, 103.82, 72.88, 31.24, -83.05, 37.62, -21.94, 15.63)
+)
+
 nc <- nc_open(nc_path)
-
-print(nc)
-
-lon <- ncvar_get(nc, "lon")
+lon <- ncvar_get(nc, "lon")   # 0 to 360
 lat <- ncvar_get(nc, "lat")
-time <- ncvar_get(nc, "time")
-tas <- ncvar_get(nc, "tas")
+time <- ncvar_get(nc, "time") # days since 0001-01-01, 365_day calendar
+nt <- length(time)
 
-cat("tas dimensions:", paste(dim(tas), collapse = " x "), "\n")
+# Convert the 365_day calendar to year and month
+year <- 1 + time %/% 365
+doy <- time %% 365
+month <- findInterval(doy, cumsum(c(0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30)))
+stopifnot(all(diff(year * 12 + month) == 1)) # consecutive months, no gaps
 
+rows <- lapply(seq_len(nrow(cities)), function(i) {
+  lon360 <- cities$lon[i] %% 360
+  # circular distance in longitude so cities near the 0/360 seam still work
+  ix <- which.min(abs(((lon - lon360) + 180) %% 360 - 180))
+  iy <- which.min(abs(lat - cities$lat[i]))
+  tas_k <- ncvar_get(nc, "tas", start = c(ix, iy, 1), count = c(1, 1, nt))
+  data.frame(
+    city = cities$city[i],
+    city_lat = cities$lat[i],
+    city_lon = cities$lon[i],
+    grid_lat = lat[iy],
+    grid_lon = ifelse(lon[ix] > 180, lon[ix] - 360, lon[ix]),
+    year = year,
+    month = month,
+    tas_C = round(as.numeric(tas_k) - 273.15, 2)
+  )
+})
 nc_close(nc)
+
+out <- do.call(rbind, rows)
+write.csv(out, out_path, row.names = FALSE)
+cat("Wrote", nrow(out), "rows to", out_path, "\n")
 ```
 
-**Lecture 9**
+
+
+Plot the monthly near-surface air temperature (FGOALS-f3-L, SSP5-8.5) for 10 cities from
+the Antarctic to the Arctic
 ```{webr}
+#| fig-width: 9
+#| fig-height: 3.5
+options(webr.fig.width = 9, webr.fig.height = 3.5)
+library(tidyverse)
+
+city_temp <- read_csv("tas_city_timeseries.csv", show_col_types = FALSE)
+
+# Order the cities from south to north and build a decimal-year axis
+city_temp <- city_temp %>%
+  mutate(
+    city = fct_reorder(city, city_lat),
+    date = year + (month - 0.5) / 12
+  )
+
+# One plot per city
+for (this_city in levels(city_temp$city)) {
+  p <- city_temp %>%
+    filter(city == this_city) %>%
+    ggplot(aes(x = date, y = tas_C)) +
+    geom_line(linewidth = 0.3) +
+    labs(
+      title = paste0(this_city, " (", unique(city_temp$city_lat[city_temp$city == this_city]), "°)"),
+      x = "Year",
+      y = "Temperature (°C)"
+    )
+  print(p)
+}
+```
+
+Plot the same time series again, this time with a linear trendline
+```{webr}
+#| fig-width: 9
+#| fig-height: 3.5
+options(webr.fig.width = 9, webr.fig.height = 3.5)
+library(tidyverse)
+
+for (this_city in levels(city_temp$city)) {
+  p <- city_temp %>%
+    filter(city == this_city) %>%
+    ggplot(aes(x = date, y = tas_C)) +
+    geom_line(linewidth = 0.3, color = "grey40") +
+    geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = "red") +
+    labs(
+      title = paste0(this_city, " (", unique(city_temp$city_lat[city_temp$city == this_city]), "°)"),
+      x = "Year",
+      y = "Temperature (°C)"
+    )
+  print(p)
+}
+```
+
+Calculate the warming rate per decade for each city (the slope of the linear trend), show it with each city's latitude, and plot the warming rate against the absolute value of the latitude
+```{webr}
+#| output: asis
+#| fig-width: 8
+#| fig-height: 5
+options(webr.fig.width = 8, webr.fig.height = 5)
+library(tidyverse)
+
+warming_rate <- city_temp %>%
+  group_by(city, city_lat) %>%
+  summarise(rate_per_decade = coef(lm(tas_C ~ date))[["date"]] * 10, .groups = "drop") %>%
+  arrange(city_lat)
+
+warming_rate %>%
+  transmute(
+    City = as.character(city),
+    `Latitude (°)` = city_lat,
+    `Warming rate (°C per decade)` = round(rate_per_decade, 2)
+  ) %>%
+  knitr::kable(format = "html", align = "lrr", table.attr = 'class="table table-sm"')
+
+warming_rate %>%
+  ggplot(aes(x = abs(city_lat), y = rate_per_decade)) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = "red") +
+  geom_point(size = 3) +
+  geom_text(aes(label = city), vjust = -0.9, size = 3.5) +
+  scale_x_continuous(expand = expansion(mult = 0.12)) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.12))) +
+  labs(
+    title = "Warming Rate vs. Absolute Latitude",
+    x = "Absolute latitude (°)",
+    y = "Warming rate (°C per decade)"
+  )
+```
