@@ -65,6 +65,63 @@ detroit_temp <- detroit_temp %>%
 
 **Lecture 9**
 
+
+The annual mean near-surface air temperature from the Flexible Global Ocean-Atmosphere-Land System (FGOALS) Model, for the SS5-8.5 scenarion, from 2015 to 2100 on a world map. This code can't run on a browser, because the climate data file (tas_Amon_FGOALS-f3-L_ssp585_r1i1p1f1_gr_201501-210012.nc) cannot be read using a web-app. You can download the file here: https://myumi.ch/DW7RD and run the code below on your own computer to analyze the file and generate the animation below. 
+```{r}
+#| message: false
+#| warning: false
+library(ncdf4)
+library(ggplot2)
+
+nc_path <- "tas_Amon_FGOALS-f3-L_ssp585_r1i1p1f1_gr_201501-210012.nc"
+gif_path <- "tas_animation.gif"
+
+nc <- nc_open(nc_path)
+lon <- ncvar_get(nc, "lon")
+lat <- ncvar_get(nc, "lat")
+years <- 2015:2100
+
+# Keep every other grid cell to keep the animation fast
+ix <- seq(1, length(lon), by = 2)
+iy <- seq(1, length(lat), by = 2)
+grid <- expand.grid(lon = lon[ix], lat = lat[iy])
+grid$lon <- ifelse(grid$lon > 180, grid$lon - 360, grid$lon) # 0-360 to -180-180
+
+# Annual mean temperature (deg C) for each year, reading 12 months at a time
+annual <- lapply(seq_along(years), function(i) {
+  tas <- ncvar_get(nc, "tas", start = c(1, 1, (i - 1) * 12 + 1), count = c(-1, -1, 12))
+  apply(tas, c(1, 2), mean)[ix, iy] - 273.15
+})
+nc_close(nc)
+
+temp_range <- range(unlist(annual)) # same color scale in every frame
+world <- map_data("world")          # coastlines and borders (needs the maps package)
+
+draw_frame <- function(i) {
+  grid$temp_C <- as.vector(annual[[i]])
+  p <- ggplot(grid, aes(lon, lat)) +
+    geom_raster(aes(fill = temp_C)) +
+    geom_path(data = world, aes(long, lat, group = group), color = "grey20", linewidth = 0.2) +
+    scale_fill_distiller(palette = "RdYlBu", limits = temp_range, name = "°C") +
+    coord_fixed(expand = FALSE) +
+    labs(
+      title = paste("Annual mean near-surface air temperature,", years[i]),
+      x = "Longitude",
+      y = "Latitude"
+    ) +
+    theme_minimal()
+  print(p)
+}
+
+# gifski stitches the frames into a GIF (0.15 s per year)
+gifski::save_gif(
+  for (i in seq_along(years)) draw_frame(i),
+  gif_file = gif_path, width = 900, height = 480, delay = 0.20, progress = FALSE
+)
+
+knitr::include_graphics(gif_path)
+```
+
 The code below extracts the temperature time series for 10 cities at different latitudes, as described below, and saves it in a file called `tas_city_timeseries.csv`.
 
 | City            | Latitude | 2015 mean (°C) |
@@ -132,63 +189,6 @@ out <- do.call(rbind, rows)
 write.csv(out, out_path, row.names = FALSE)
 cat("Wrote", nrow(out), "rows to", out_path, "\n")
 ```
-
-Animate the annual mean near-surface air temperature from 2015 to 2100 on a world map. This code runs in desktop R when the page is rendered (it needs the large `.nc` file and `ncdf4`, which are not available in webR), and the resulting GIF is shown below the code.
-```{r}
-#| message: false
-#| warning: false
-library(ncdf4)
-library(ggplot2)
-
-nc_path <- "tas_Amon_FGOALS-f3-L_ssp585_r1i1p1f1_gr_201501-210012.nc"
-gif_path <- "tas_animation.gif"
-
-nc <- nc_open(nc_path)
-lon <- ncvar_get(nc, "lon")
-lat <- ncvar_get(nc, "lat")
-years <- 2015:2100
-
-# Keep every other grid cell to keep the animation fast
-ix <- seq(1, length(lon), by = 2)
-iy <- seq(1, length(lat), by = 2)
-grid <- expand.grid(lon = lon[ix], lat = lat[iy])
-grid$lon <- ifelse(grid$lon > 180, grid$lon - 360, grid$lon) # 0-360 to -180-180
-
-# Annual mean temperature (deg C) for each year, reading 12 months at a time
-annual <- lapply(seq_along(years), function(i) {
-  tas <- ncvar_get(nc, "tas", start = c(1, 1, (i - 1) * 12 + 1), count = c(-1, -1, 12))
-  apply(tas, c(1, 2), mean)[ix, iy] - 273.15
-})
-nc_close(nc)
-
-temp_range <- range(unlist(annual)) # same color scale in every frame
-world <- map_data("world")          # coastlines and borders (needs the maps package)
-
-draw_frame <- function(i) {
-  grid$temp_C <- as.vector(annual[[i]])
-  p <- ggplot(grid, aes(lon, lat)) +
-    geom_raster(aes(fill = temp_C)) +
-    geom_path(data = world, aes(long, lat, group = group), color = "grey20", linewidth = 0.2) +
-    scale_fill_distiller(palette = "RdYlBu", limits = temp_range, name = "°C") +
-    coord_fixed(expand = FALSE) +
-    labs(
-      title = paste("Annual mean near-surface air temperature,", years[i]),
-      x = "Longitude",
-      y = "Latitude"
-    ) +
-    theme_minimal()
-  print(p)
-}
-
-# gifski stitches the frames into a GIF (0.15 s per year)
-gifski::save_gif(
-  for (i in seq_along(years)) draw_frame(i),
-  gif_file = gif_path, width = 900, height = 480, delay = 0.20, progress = FALSE
-)
-
-knitr::include_graphics(gif_path)
-```
-
 
 
 Plot the monthly near-surface air temperature (FGOALS-f3-L, SSP5-8.5) for 10 cities from
